@@ -1,0 +1,45 @@
+# 패키지 빌드용이 아니라 도구 설정 전용 파일이다. 의존성은 requirements*.txt에 있다.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.anti-slop]
+include = ["app", "tests"]
+groups = ["fastapi"]
+exclude = [
+  ".agent/**",
+  ".agents/**",
+  ".claude/**",
+  ".codex/**",
+  ".continue/**",
+  ".cursor/**",
+  ".gemini/**",
+  ".opencode/**",
+  ".pi/**",
+  ".roo/**",
+  ".windsurf/**",
+  "tools/anti_slop/**",
+]
+
+[tool.anti-slop.rules]
+no-adhoc-isinstance = "error"
+no-any-parameters = "error"
+no-any-returns = "error"
+no-any-type-aliases = "error"
+no-chained-casts = "error"
+no-conditional-empty-dict-spread = "error"
+no-dynamic-dispatch = "error"
+no-known-value-widening = "error"
+no-module-mocking = "error"
+no-object-parameters = "error"
+no-shape-in-symbol-names = "error"
+no-string-attribute-access = "error"
+no-unsafe-dict-values = "error"
+no-widen-then-cast = "error"
+require-safety-comment = "error"
+"fastapi/no-dict-body-parameters" = "error"
+"fastapi/no-raw-request-parsing" = "error"
+"fastapi/no-state-attribute-access" = "error"
+"fastapi/no-untyped-route-response" = "error"

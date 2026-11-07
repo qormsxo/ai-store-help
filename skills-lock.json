@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "install-anti-slop-py": {
+      "source": "TinyFrontier/anti-slop-py",
+      "sourceType": "github",
+      "skillPath": "skills/install-anti-slop-py/SKILL.md",
+      "computedHash": "5c5c7857e01a43c2d24513991e464e5629e30e95406730aa3deb01f734d0a8e8"
+    }
+  }
+}
