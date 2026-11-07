@@ -1,21 +1,18 @@
 import logging
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.errors import StoreNotConfiguredError
 from app.models import Store
+from app.repositories import store_repository
 
 logger = logging.getLogger(__name__)
 
 
 async def get_store_by_slug(session: AsyncSession, slug: str) -> Store:
     """slug로 매장과 영업시간을 조회한다. 없으면 StoreNotConfiguredError."""
-    store = await session.scalar(
-        select(Store).where(Store.slug == slug).options(selectinload(Store.business_hours))
-    )
+    store = await store_repository.find_store_by_slug(session, slug)
     if store is None:
         # 클라이언트에는 일반 메시지만 주고, 해결 방법은 서버 로그에 남긴다.
         logger.error("Store %r does not exist. Run `python -m app.seed` to create it.", slug)
