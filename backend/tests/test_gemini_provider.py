@@ -77,7 +77,12 @@ async def test_request_uses_manual_function_calling_and_settings() -> None:
     assert call.config.automatic_function_calling == types.AutomaticFunctionCallingConfig(disable=True)
     assert call.config.tools is not None
     declarations = call.config.tools[0].function_declarations or []
-    assert [d.name for d in declarations] == ["get_store_profile", "search_knowledge", "create_support_ticket"]
+    assert [d.name for d in declarations] == [
+        "get_store_profile",
+        "search_knowledge",
+        "create_support_ticket",
+        "reject_not_inquiry",
+    ]
     assert declarations[0].parameters_json_schema is None
     search_schema = ToolDispatcher().definitions()[1].parameters
     assert declarations[1].parameters_json_schema == search_schema

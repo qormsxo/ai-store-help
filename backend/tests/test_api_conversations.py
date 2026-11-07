@@ -526,6 +526,22 @@ async def test_missing_gemini_configuration_is_503(client: httpx.AsyncClient, se
     assert await stored_messages(session, conversation_id) == []
 
 
+async def test_non_inquiry_returns_422_and_does_not_save_an_answer(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    conversation_id = await start_conversation(client)
+    use_agent(MockGeminiProvider([function_call("reject_not_inquiry")]))
+
+    res = await send(client, conversation_id, "How is the weather?")
+
+    assert res.status_code == 422
+    assert error_of(res) == {"code": "NOT_STORE_INQUIRY", "message": "매장에 대한 문의만 답변할 수 있습니다."}
+    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
+        (MessageRole.USER, "How is the weather?")
+    ]
+    assert await ticket_count(session) == 0
+
+
 # --- 13. Agent 실행 실패 시 고객 메시지 보존 ------------------------------------------------------------
 
 

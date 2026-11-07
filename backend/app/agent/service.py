@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.prompts import SYSTEM_INSTRUCTION
 from app.agent.tools import AgentContext, ToolDispatcher
-from app.errors import AgentEmptyResponseError, AgentLimitExceededError
+from app.errors import AgentEmptyResponseError, AgentLimitExceededError, NotStoreInquiryError
 from app.llm.provider import LLMProvider
 from app.llm.types import ModelTurn, StreamItem, TextDelta, ToolDefinition, ToolResultTurn, Turn, UserTurn
 from app.models import Conversation, Message, MessageRole
@@ -138,6 +138,11 @@ class AgentService:
                 raise AgentEmptyResponseError("AI가 답변을 만들지 못했습니다. 다시 시도해 주세요.")
             # Function Call이 담긴 모델 응답도 그대로 Context에 남겨야 다음 요청에서 결과와 짝이 맞는다.
             turns.append(model_turn)
+
+            if any(call.name == "reject_not_inquiry" for call in model_turn.tool_calls):
+                # 다른 Tool과 같이 왔어도 실행하지 않는다. 티켓을 만들거나 답을 저장하지 않는다.
+                logger.info("Rejected a message that is not a store inquiry: conversation=%s", context.conversation.id)
+                raise NotStoreInquiryError("매장에 대한 문의만 답변할 수 있습니다.")
 
             if not model_turn.tool_calls:
                 if model_turn.text and model_turn.text.strip():

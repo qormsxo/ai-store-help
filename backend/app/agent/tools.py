@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.errors import AppError
+from app.errors import AppError, NotStoreInquiryError
 from app.llm.types import JsonObject, ToolCall, ToolDefinition, ToolResult
 from app.models import Conversation, EscalationReason, TicketStatus
 from app.schemas import ErrorBody, ErrorDetail, ErrorResponse, KnowledgeSearchItem, StoreProfile
@@ -124,6 +124,10 @@ async def _create_support_ticket(
     return TicketCreationOutput(ticket_id=creation.ticket.id, status=creation.ticket.status, created=creation.created)
 
 
+async def _reject_not_inquiry(_: AgentContext, __: NoArguments) -> BaseModel:
+    raise NotStoreInquiryError("매장에 대한 문의만 답변할 수 있습니다.")
+
+
 DEFAULT_TOOLS: tuple[AgentTool, ...] = (
     Tool(
         name="get_store_profile",
@@ -152,6 +156,15 @@ DEFAULT_TOOLS: tuple[AgentTool, ...] = (
         ),
         arguments_model=CreateSupportTicketArguments,
         handler=_create_support_ticket,
+    ),
+    Tool(
+        name="reject_not_inquiry",
+        description=(
+            "Reject the message because it is not a question about this store, such as a greeting, small talk, "
+            "or an unrelated topic. Call this instead of answering."
+        ),
+        arguments_model=NoArguments,
+        handler=_reject_not_inquiry,
     ),
 )
 
@@ -198,6 +211,8 @@ class ToolDispatcher:
                 for error in exc.errors(include_url=False, include_input=False, include_context=False)
             ]
             return _error("INVALID_ARGUMENTS", "The tool arguments are invalid.", details), "invalid_arguments"
+        except NotStoreInquiryError:
+            raise
         except (SQLAlchemyError, AppError) as exc:
             # SQL 파라미터에 고객 문장이 들어 있을 수 있어 예외 메시지 대신 종류만 남긴다.
             logger.error("Tool %s failed: %s", call.name, type(exc).__name__)

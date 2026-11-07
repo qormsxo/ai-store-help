@@ -109,6 +109,13 @@ class AgentEmptyResponseError(AppError):
     code = "AGENT_EMPTY_RESPONSE"
 
 
+class NotStoreInquiryError(AppError):
+    """고객 메시지가 매장 문의가 아니라서 답변하지 않는다."""
+
+    status_code = 422
+    code = "NOT_STORE_INQUIRY"
+
+
 def _error_response(
     status_code: int,
     code: str,

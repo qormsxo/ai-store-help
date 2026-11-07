@@ -283,6 +283,27 @@ async def test_failure_in_the_middle_of_the_answer_never_saves_a_partial_message
     # 답변 없는 티켓이 남지 않는다.
     assert await ticket_count(session) == 0
 
+async def test_non_inquiry_is_an_error_event_and_the_answer_is_not_saved(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    conversation_id = await start_conversation(client)
+    use_agent(
+        MockGeminiProvider(
+            [Chunks(["Nice weather."], tool_calls=function_call("reject_not_inquiry").tool_calls)]
+        )
+    )
+
+    res = await stream(client, conversation_id, "How is the weather?")
+
+    events = parse_sse(res.text)
+    assert [e.name for e in events] == ["message_delta", "error"]
+    assert events[1].data == {"code": "NOT_STORE_INQUIRY", "message": "매장에 대한 문의만 답변할 수 있습니다."}
+    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
+        (MessageRole.USER, "How is the weather?")
+    ]
+    assert await ticket_count(session) == 0
+
+
 async def test_unexpected_error_is_reported_without_internal_details(
     client: httpx.AsyncClient, session: AsyncSession, store: Store
 ) -> None:

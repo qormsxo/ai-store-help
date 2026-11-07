@@ -26,6 +26,7 @@ from app.errors import (
     ConversationNotFoundError,
     LLMRateLimitedError,
     LLMTimeoutError,
+    NotStoreInquiryError,
 )
 from app.llm.types import JsonObject, ModelTurn, ToolCall, UserTurn
 from app.models import (
@@ -103,7 +104,12 @@ async def test_store_profile_tool_is_declared_and_executed(
 
     first = provider.requests[0]
     assert first.system_instruction == SYSTEM_INSTRUCTION
-    assert [tool.name for tool in first.tools] == ["get_store_profile", "search_knowledge", "create_support_ticket"]
+    assert [tool.name for tool in first.tools] == [
+        "get_store_profile",
+        "search_knowledge",
+        "create_support_ticket",
+        "reject_not_inquiry",
+    ]
     # 인자가 없는 Tool은 parameters 스키마도 없다.
     assert first.tools[0].parameters is None
     assert first.turns == (UserTurn(text="What is your store address?"),)
@@ -616,3 +622,34 @@ async def test_closed_conversation_is_rejected(
         await ask(AgentService(provider), session, store, conversation, "Hi")
 
     assert provider.requests == []
+
+
+# --- 매장 문의가 아닌 메시지 ----------------------------------------------------------------
+
+
+async def test_non_inquiry_is_rejected_and_does_not_run_other_tools(
+    session: AsyncSession, store: Store, conversation: Conversation
+) -> None:
+    provider = MockGeminiProvider(
+        [
+            ModelTurn(
+                tool_calls=[
+                    ToolCall(
+                        id="ticket",
+                        name="create_support_ticket",
+                        arguments={"question": "How is the weather?", "escalation_reason": "no_knowledge"},
+                    ),
+                    ToolCall(id="reject", name="reject_not_inquiry", arguments={}),
+                ]
+            )
+        ]
+    )
+
+    with pytest.raises(NotStoreInquiryError) as exc_info:
+        await ask(AgentService(provider), session, store, conversation, "How is the weather?")
+
+    assert (exc_info.value.status_code, exc_info.value.code) == (422, "NOT_STORE_INQUIRY")
+    assert exc_info.value.message == "매장에 대한 문의만 답변할 수 있습니다."
+    assert [m.role for m in await messages_of(session, conversation)] == [MessageRole.USER]
+    assert await ticket_count(session) == 0
+    assert len(provider.requests) == 1

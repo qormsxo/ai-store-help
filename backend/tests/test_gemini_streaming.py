@@ -81,7 +81,12 @@ async def test_stream_request_uses_manual_function_calling_and_the_full_context(
     assert call.config.system_instruction == "system"
     assert call.config.automatic_function_calling == types.AutomaticFunctionCallingConfig(disable=True)
     declared = [d.name for tool in call.config.tools or [] for d in tool.function_declarations or []]
-    assert declared == ["get_store_profile", "search_knowledge", "create_support_ticket"]
+    assert declared == [
+        "get_store_profile",
+        "search_knowledge",
+        "create_support_ticket",
+        "reject_not_inquiry",
+    ]
 
 # --- 재시도: 고객에게 아무것도 보내기 전에만 ----------------------------------------------------------
 

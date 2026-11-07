@@ -139,7 +139,7 @@ docker compose exec backend pytest
 
 - 매장은 서버가 `DEFAULT_STORE_SLUG`로 정한다. 다른 매장의 대화는 없는 대화와 같은 404다.
 - `visitor_id`는 익명 구분용이고 인증이 아니다. 같은 `visitor_id`로 대화를 여러 개 만들 수 있고 각 대화의 기록은 독립이다.
-- 오류 코드: `CONVERSATION_NOT_FOUND`(404), `CONVERSATION_CLOSED`(409), `VALIDATION_ERROR`(422), `MESSAGE_SAVE_FAILED`(503), 그리고 아래 `LLM_*`/`AGENT_*`.
+- 오류 코드: `CONVERSATION_NOT_FOUND`(404), `CONVERSATION_CLOSED`(409), `VALIDATION_ERROR`(422), `NOT_STORE_INQUIRY`(422), `MESSAGE_SAVE_FAILED`(503), 그리고 아래 `LLM_*`/`AGENT_*`.
 
 메시지 전송은 트랜잭션을 둘로 나눈다(`services/chat_service.py`).
 
@@ -201,6 +201,7 @@ AI가 넘긴 문의(티켓)를 보고 답하면, 그 답이 지식으로 쌓이�
 | `get_store_profile` | 없음 | 매장 기본 정보와 요일별 영업시간 |
 | `search_knowledge` | `query` | 사장이 쌓은 지식 Full Text Search (없으면 빈 배열) |
 | `create_support_ticket` | `question`, `escalation_reason` | 사장에게 넘길 티켓 생성 |
+| `reject_not_inquiry` | 없음 | 매장 문의가 아닌 메시지. 호출하면 `422 NOT_STORE_INQUIRY`로 거절하고 답변은 저장하지 않는다 |
 
 - `store_id`, `conversation_id`, `source_message_id`는 Backend가 실행 Context에서 넣는다. Tool 인자 모델은 `extra="forbid"`라서 LLM이 이 값을 보내면 `INVALID_ARGUMENTS`가 된다.
 - Tool 실패(잘못된 인자, 없는 Tool, DB 오류)는 예외 대신 오류 Observation으로 LLM에 돌려준다. Tool마다 savepoint를 써서 DB 오류 뒤에도 세션을 계속 쓴다.
@@ -213,6 +214,7 @@ AI가 넘긴 문의(티켓)를 보고 답하면, 그 답이 지식으로 쌓이�
 | `LLM_RATE_LIMITED` | 429 | 재시도 후에도 Gemini 요청 한도 초과 |
 | `LLM_UNAVAILABLE` | 503 | 재시도 후에도 Gemini 서버/네트워크 오류 |
 | `AGENT_LIMIT_EXCEEDED` / `AGENT_EMPTY_RESPONSE` | 502 | 반복 한도 초과 / 빈 응답 |
+| `NOT_STORE_INQUIRY` | 422 | 매장 문의가 아닌 메시지. 답변은 저장하지 않는다 |
 
 ## 코드 품질 검사 (anti-slop)
 
