@@ -3,14 +3,15 @@
 소규모 사업자의 고객 문의를 AI가 응대하고, AI가 답할 수 없는 문의는 사장에게 전달하는 서비스.
 사장의 답변은 지식 DB에 쌓여서 이후 유사한 문의에 AI가 자동 응답한다.
 
-> 현재 상태: **기반 설정 + DB 모델 + 매장 정보 단계**. Health Check, 라우팅, 공통 레이아웃, DB 모델/마이그레이션, 매장 정보 API(`GET /api/store`)와 seed까지 있고 Agent와 업무 기능은 아직 없다.
+> 현재 상태: **AI Agent 단계**. Health Check, DB 모델/마이그레이션, 매장 정보 API(`GET /api/store`)와 seed, Gemini Function Calling Agent(`app/agent/`)까지 있다. Agent를 부르는 채팅 REST API와 SSE, 사장 화면은 아직 없다.
 
 ## 기술 스택
 
 | 영역 | 기술 |
 | --- | --- |
 | Backend | Python 3.14, FastAPI, SQLAlchemy 2.x (async, asyncpg), Pydantic v2 |
-| Database | PostgreSQL 16 |
+| Database | PostgreSQL 16 (Knowledge 검색은 English Full Text Search) |
+| AI | Google Gemini (`google-genai` SDK, async client, 수동 Function Calling) |
 | Frontend | React 19, Vite, TypeScript, React Router |
 | 실행 환경 | Docker Compose |
 
@@ -122,6 +123,37 @@ docker compose exec backend pytest
 - 테스트 세션 시작 때 `alembic downgrade base` → `upgrade head`를 실행하므로 마이그레이션도 함께 검증된다.
 - 테스트마다 트랜잭션을 롤백해서 서로 영향을 주지 않는다.
 - `tests/test_migrations.py`는 모델과 마이그레이션이 어긋나면 실패한다. 모델을 고치면 마이그레이션을 같이 만든다.
+- Agent 테스트는 실제 Gemini를 부르지 않는다. `tests/mock_llm.py`의 `MockGeminiProvider`(가짜)가 미리 정한 응답을 돌려주고, 실제 `AgentService`와 `ToolDispatcher`가 DB와 함께 동작한다.
+- 실제 Gemini를 부르는 테스트는 `@pytest.mark.live`로 표시되어 기본 실행에서 빠진다. `GEMINI_API_KEY`와 `GEMINI_MODEL`을 설정한 뒤 `pytest -m live`로 실행한다 (키가 없으면 skip). API 사용량이 든다.
+
+## AI Agent
+
+고객 메시지 하나를 `AgentService.reply()`가 처리한다. Tool 선택은 LLM이 하고, 코드는 실행과 반복만 한다.
+
+1. 대화(현재 매장 소속인지 확인)와 최근 메시지 20개를 불러오고, 고객 메시지를 저장한다.
+2. System Instruction, 대화 기록, Tool 선언을 Gemini에 보낸다 (Automatic Function Calling은 끔).
+3. 응답에 Function Call이 있으면 `ToolDispatcher`가 실행하고, 결과(Observation)를 Function Response로 붙여 다시 보낸다.
+4. Function Call 없이 텍스트가 오면 최종 답변으로 저장하고 끝낸다.
+
+| Tool | 인자 | 하는 일 |
+| --- | --- | --- |
+| `get_store_profile` | 없음 | 매장 기본 정보와 요일별 영업시간 |
+| `search_knowledge` | `query` | 사장이 쌓은 지식 Full Text Search (없으면 빈 배열) |
+| `create_support_ticket` | `question`, `escalation_reason` | 사장에게 넘길 티켓 생성 |
+
+- `store_id`, `conversation_id`, `source_message_id`는 Backend가 실행 Context에서 넣는다. Tool 인자 모델은 `extra="forbid"`라서 LLM이 이 값을 보내면 `INVALID_ARGUMENTS`가 된다.
+- Tool 실패(잘못된 인자, 없는 Tool, DB 오류)는 예외 대신 오류 Observation으로 LLM에 돌려준다. Tool마다 savepoint를 써서 DB 오류 뒤에도 세션을 계속 쓴다.
+- 한 요청에서 LLM 호출은 최대 6번, Tool 호출은 최대 6번이다. 넘으면 `502 AGENT_LIMIT_EXCEEDED`.
+- Gemini 429/5xx와 연결 오류는 최대 3번(1초, 2초 대기) 시도한다. 타임아웃과 그 밖의 4xx는 재시도하지 않는다.
+- 커밋은 호출하는 쪽이 한다. 실패하면 롤백되어 고객 메시지와 티켓이 반쯤 저장되지 않는다.
+
+| 오류 코드 | HTTP | 원인 |
+| --- | --- | --- |
+| `LLM_NOT_CONFIGURED` | 503 | 키/모델 미설정, 잘못된 키, 없는 모델 |
+| `LLM_TIMEOUT` | 504 | `GEMINI_TIMEOUT` 초과 |
+| `LLM_RATE_LIMITED` | 429 | 재시도 후에도 Gemini 요청 한도 초과 |
+| `LLM_UNAVAILABLE` | 503 | 재시도 후에도 Gemini 서버/네트워크 오류 |
+| `AGENT_LIMIT_EXCEEDED` / `AGENT_EMPTY_RESPONSE` | 502 | 반복 한도 초과 / 빈 응답 |
 
 ## 코드 품질 검사 (anti-slop)
 
@@ -144,6 +176,10 @@ python tools/anti_slop
 | `POSTGRES_PORT` | 호스트에 노출할 DB 포트 | `5432` |
 | `DATABASE_URL` | 로컬 실행용 DB 접속 문자열 (Docker에서는 compose가 덮어씀) | `postgresql+asyncpg://app:app@localhost:5432/app` |
 | `DEFAULT_STORE_SLUG` | 이 환경이 응대하는 매장의 slug (소문자, 숫자, 하이픈) | `oak-pine-demo` |
+| `GEMINI_API_KEY` | Gemini API 키. 없어도 서버는 뜨고 Agent만 503 | 없음 |
+| `GEMINI_MODEL` | Gemini 모델 이름. 바꾸면 다른 모델을 쓴다 | 없음 (예: `gemini-3.8-flash`) |
+| `GEMINI_MAX_OUTPUT_TOKENS` | 응답 최대 토큰 | `2048` |
+| `GEMINI_TIMEOUT` | 요청 한 번의 제한 시간(초) | `30` |
 | `APP_ENV` | 실행 환경 | `development` |
 | `LOG_LEVEL` | 로그 레벨 | `INFO` |
 | `BACKEND_PORT` / `FRONTEND_PORT` | 호스트에 노출할 포트 | `8000` / `5173` |
@@ -166,6 +202,9 @@ ai-store-help/
       schemas.py                # Pydantic 스키마
       api/                      # 라우터 (요청/응답 처리만)
       services/                 # 비즈니스 로직
+      repositories/             # DB 조회 함수
+      llm/                      # LLMProvider 인터페이스, GeminiProvider, 공통 대화 타입
+      agent/                    # AgentService(실행 Loop), Tool, ToolDispatcher, System Instruction
     alembic/                    # 마이그레이션 (env.py는 async)
     tests/
     tools/anti_slop/            # 코드 품질 린터 (vendored)

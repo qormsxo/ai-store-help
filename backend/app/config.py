@@ -2,7 +2,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://app:app@localhost:5432/app"
     # 이 실행 환경이 응대하는 매장. 요청이나 LLM이 아니라 서버 설정으로만 정해진다.
     default_store_slug: str = "oak-pine-demo"
+
+    # Gemini. 키와 모델은 코드에 기본값을 두지 않는다. 없으면 Agent 호출 시 LLM_NOT_CONFIGURED 오류가 난다.
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str | None = None
+    gemini_max_output_tokens: int = Field(default=2048, gt=0)
+    # 요청 한 번(시도 한 번)의 제한 시간, 초 단위.
+    gemini_timeout: float = Field(default=30, gt=0)
 
     @field_validator("default_store_slug")
     @classmethod

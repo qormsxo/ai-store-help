@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.main import app
-from app.models import Store
+from app.models import Conversation, Store
 from tests.db_utils import (
     UTC_SESSION,
     alembic_config,
@@ -18,7 +18,7 @@ from tests.db_utils import (
     scratch_database_url,
     database_url_for_tests,
 )
-from tests.factories import create_store
+from tests.factories import create_conversation, create_store
 
 
 @pytest.fixture(scope="session")
@@ -56,6 +56,11 @@ async def session(migrated_database_url: str) -> AsyncIterator[AsyncSession]:
 async def store(session: AsyncSession) -> Store:
     """테스트 트랜잭션 안의 기본 매장. 테스트가 끝나면 롤백된다."""
     return await create_store(session)
+
+
+@pytest.fixture
+async def conversation(session: AsyncSession, store: Store) -> Conversation:
+    return await create_conversation(session, store)
 
 
 @pytest.fixture

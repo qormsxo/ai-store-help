@@ -4,6 +4,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
+# 실제 Gemini API를 부르는 테스트는 기본 실행에서 뺀다. 실행: pytest -m live (GEMINI_API_KEY 필요)
+addopts = "-m 'not live'"
+markers = ["live: 실제 외부 API(Gemini)를 호출하는 테스트"]
 
 [tool.anti-slop]
 include = ["app", "tests"]

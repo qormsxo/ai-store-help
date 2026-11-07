@@ -43,6 +43,57 @@ class StoreNotConfiguredError(AppError):
     code = "STORE_NOT_CONFIGURED"
 
 
+class ConversationNotFoundError(NotFoundError):
+    code = "CONVERSATION_NOT_FOUND"
+
+
+class ConversationClosedError(ConflictError):
+    code = "CONVERSATION_CLOSED"
+
+
+class LLMNotConfiguredError(AppError):
+    """GEMINI_API_KEY/GEMINI_MODEL이 없거나, 키 또는 모델이 Gemini에서 거부되었다."""
+
+    status_code = 503
+    code = "LLM_NOT_CONFIGURED"
+
+
+class LLMTimeoutError(AppError):
+    status_code = 504
+    code = "LLM_TIMEOUT"
+
+
+class LLMRateLimitedError(AppError):
+    status_code = 429
+    code = "LLM_RATE_LIMITED"
+
+
+class LLMUnavailableError(AppError):
+    """재시도해도 Gemini 서버 오류나 네트워크 오류가 계속되었다."""
+
+    status_code = 503
+    code = "LLM_UNAVAILABLE"
+
+
+class LLMRequestError(AppError):
+    """Gemini가 요청 자체를 거부했다(재시도해도 같은 결과가 나오는 4xx)."""
+
+    status_code = 502
+    code = "LLM_REQUEST_FAILED"
+
+
+class AgentLimitExceededError(AppError):
+    status_code = 502
+    code = "AGENT_LIMIT_EXCEEDED"
+
+
+class AgentEmptyResponseError(AppError):
+    """LLM이 Tool 호출도 최종 텍스트도 돌려주지 않았다."""
+
+    status_code = 502
+    code = "AGENT_EMPTY_RESPONSE"
+
+
 def _error_response(
     status_code: int,
     code: str,
