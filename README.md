@@ -3,7 +3,7 @@
 소규모 사업자의 고객 문의를 AI가 응대하고, AI가 답할 수 없는 문의는 사장에게 전달하는 서비스.
 사장의 답변은 지식 DB에 쌓여서 이후 유사한 문의에 AI가 자동 응답한다.
 
-> 현재 상태: **기반 설정 + DB 모델 단계**. Health Check, 라우팅, 공통 레이아웃, DB 모델/마이그레이션까지 있고 Agent와 업무 기능은 아직 없다.
+> 현재 상태: **기반 설정 + DB 모델 + 매장 정보 단계**. Health Check, 라우팅, 공통 레이아웃, DB 모델/마이그레이션, 매장 정보 API(`GET /api/store`)와 seed까지 있고 Agent와 업무 기능은 아직 없다.
 
 ## 기술 스택
 
@@ -21,13 +21,17 @@ Python 버전은 `backend/Dockerfile`의 `FROM python:3.14-slim` 한 줄로 바�
 ```bash
 cp .env.example .env
 docker compose up --build
+docker compose exec backend python -m app.seed    # 데모 매장 생성 (처음 한 번)
 ```
+
+seed 전에는 매장이 없어서 `GET /api/store`가 503(`STORE_NOT_CONFIGURED`)을 반환하고, 화면 상단에 "매장 정보를 불러오지 못했습니다" 안내가 뜬다. seed를 실행하면 해소된다.
 
 | 서비스 | 주소 |
 | --- | --- |
 | Frontend | http://localhost:5173 |
 | Backend API 문서 | http://localhost:8000/docs |
 | Health Check | http://localhost:8000/api/health |
+| 매장 정보 | http://localhost:8000/api/store |
 | PostgreSQL | localhost:5432 (`.env`의 `POSTGRES_PORT`) |
 
 Health Check 정상 응답:
@@ -66,8 +70,32 @@ npm run dev
 
 ## 데이터베이스와 마이그레이션
 
-테이블 4개: `conversations`, `messages`, `support_tickets`, `knowledge_entries` (모델: `backend/app/models.py`).
-Knowledge DB는 비어 있는 상태로 시작한다. Seed 데이터는 없다.
+테이블 6개 (모델: `backend/app/models.py`):
+
+- `stores`, `business_hours`: 매장 정보와 요일별 영업시간
+- `conversations`, `messages`: 고객(visitor_id 기반 익명) 대화
+- `support_tickets`, `knowledge_entries`: 사장에게 넘긴 문의와 축적된 지식
+
+`conversations`, `support_tickets`, `knowledge_entries`는 `store_id`를 가진다. `messages`의 매장은 `conversation.store_id`로 얻는다.
+사장 계정과 User 테이블은 없다.
+
+### 매장 고정 정책
+
+- 한 실행 환경에서는 매장 하나만 쓴다. 환경변수 `DEFAULT_STORE_SLUG`(기본값 `oak-pine-demo`)가 그 매장을 정한다.
+- 고객 요청과 LLM은 `store_id`를 지정할 수 없다. 백엔드가 slug로 매장을 조회해 내부적으로만 넘긴다.
+- 해당 slug의 매장이 DB에 없으면 `503 STORE_NOT_CONFIGURED`를 반환한다.
+- 영업시간은 요일을 0=월요일 … 6=일요일로 저장하고, 시간이 NULL이면 휴무다. 시각은 매장 `timezone` 기준 현지 시각이다.
+
+### Seed
+
+```bash
+docker compose exec backend python -m app.seed    # 로컬 실행이면 backend/에서 python -m app.seed
+```
+
+- 가상의 미국 매장 1건과 영업시간 7건(일요일 휴무)을 만든다.
+- 여러 번 실행해도 중복이 생기지 않는다. 같은 slug의 매장이 이미 있으면 **아무것도 바꾸지 않는다**(수정한 매장 정보를 덮어쓰지 않는다).
+- Knowledge, Conversation, Message, SupportTicket은 만들지 않는다. **Knowledge DB는 항상 빈 상태로 시작한다.**
+- 역할 구분: 마이그레이션은 스키마를, seed는 데모 데이터를 담당한다. 기존 데이터가 있는 DB에 `0002`를 적용하면 마이그레이션이 placeholder 매장(`Migrated Store`) 1건을 만들어 기존 행을 연결한다. 이 경우 seed는 같은 slug를 건너뛰므로 매장 정보를 직접 수정한다.
 
 Docker Compose의 backend는 기동할 때 `alembic upgrade head`를 자동 실행한다. 수동 실행은 다음과 같다.
 
@@ -115,6 +143,7 @@ python tools/anti_slop
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | DB 계정과 이름 | `app` |
 | `POSTGRES_PORT` | 호스트에 노출할 DB 포트 | `5432` |
 | `DATABASE_URL` | 로컬 실행용 DB 접속 문자열 (Docker에서는 compose가 덮어씀) | `postgresql+asyncpg://app:app@localhost:5432/app` |
+| `DEFAULT_STORE_SLUG` | 이 환경이 응대하는 매장의 slug (소문자, 숫자, 하이픈) | `oak-pine-demo` |
 | `APP_ENV` | 실행 환경 | `development` |
 | `LOG_LEVEL` | 로그 레벨 | `INFO` |
 | `BACKEND_PORT` / `FRONTEND_PORT` | 호스트에 노출할 포트 | `8000` / `5173` |
@@ -132,6 +161,7 @@ ai-store-help/
       config.py                 # 환경변수 설정 (pydantic-settings)
       db.py                     # async 엔진, 세션
       models.py                 # SQLAlchemy 모델과 enum
+      seed.py                   # 데모 매장 seed (python -m app.seed)
       errors.py                 # 공통 예외와 에러 응답 형식
       schemas.py                # Pydantic 스키마
       api/                      # 라우터 (요청/응답 처리만)

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
-import { fetchHealth } from "../api/client";
+import { fetchHealth, fetchStore, type Store } from "../api/client";
 
 type BackendStatus = "checking" | "ok" | "down";
+type StoreState = { kind: "loading" } | { kind: "ready"; store: Store } | { kind: "missing" };
 
 const STATUS_LABEL: Record<BackendStatus, string> = {
   checking: "서버 확인 중",
@@ -13,23 +14,34 @@ const STATUS_LABEL: Record<BackendStatus, string> = {
 
 export default function Layout() {
   const [status, setStatus] = useState<BackendStatus>("checking");
+  const [storeState, setStoreState] = useState<StoreState>({ kind: "loading" });
 
   useEffect(() => {
     fetchHealth()
       .then(() => setStatus("ok"))
       .catch(() => setStatus("down"));
+    fetchStore()
+      .then((store) => setStoreState({ kind: "ready", store }))
+      .catch(() => setStoreState({ kind: "missing" }));
   }, []);
+
+  const title = storeState.kind === "ready" ? storeState.store.name : "AI Store Help";
 
   return (
     <div className="app">
       <header className="app-header">
-        <strong className="app-title">AI Store Help</strong>
+        <strong className="app-title">{title}</strong>
         <nav className="app-nav">
           <NavLink to="/chat">고객 채팅</NavLink>
           <NavLink to="/owner">사장 문의 관리</NavLink>
         </nav>
         <span className={`status status-${status}`}>{STATUS_LABEL[status]}</span>
       </header>
+      {storeState.kind === "missing" && (
+        <div className="store-banner" role="alert">
+          매장 정보를 불러오지 못했습니다. 관리자에게 문의해 주세요.
+        </div>
+      )}
       <main className="app-main">
         <Outlet />
       </main>

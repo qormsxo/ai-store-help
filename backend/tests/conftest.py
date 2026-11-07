@@ -1,40 +1,24 @@
 import asyncio
 from collections.abc import AsyncIterator
-from pathlib import Path
 
 import httpx
 import pytest
 from alembic import command
-from alembic.config import Config
-from sqlalchemy import text
-from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.config import get_settings
 from app.main import app
-
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-UTC_SESSION = {"server_settings": {"timezone": "UTC"}}
-
-
-def _test_database_url() -> URL:
-    """개발 DB와 같은 서버의 `<DB이름>_test` 데이터베이스. 개발 데이터를 건드리지 않는다."""
-    url = make_url(get_settings().database_url)
-    return url.set(database=f"{url.database}_test")
-
-
-async def _create_database_if_missing(url: URL) -> None:
-    admin = create_async_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT", poolclass=NullPool)
-    try:
-        async with admin.connect() as connection:
-            exists = await connection.scalar(
-                text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": url.database}
-            )
-            if not exists:
-                await connection.execute(text(f'CREATE DATABASE "{url.database}"'))
-    finally:
-        await admin.dispose()
+from app.models import Store
+from tests.db_utils import (
+    UTC_SESSION,
+    alembic_config,
+    create_database_if_missing,
+    drop_database_if_exists,
+    recreate_database,
+    scratch_database_url,
+    database_url_for_tests,
+)
+from tests.factories import create_store
 
 
 @pytest.fixture(scope="session")
@@ -43,15 +27,13 @@ def migrated_database_url() -> str:
 
     downgrade → upgrade를 매번 실행하므로 마이그레이션의 양방향 동작도 함께 검증된다.
     """
-    url = _test_database_url()
-    asyncio.run(_create_database_if_missing(url))
+    url = database_url_for_tests()
+    asyncio.run(create_database_if_missing(url))
 
-    rendered = url.render_as_string(hide_password=False)
-    config = Config(str(BACKEND_DIR / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", rendered.replace("%", "%%"))
+    config = alembic_config(url)
     command.downgrade(config, "base")
     command.upgrade(config, "head")
-    return rendered
+    return url.render_as_string(hide_password=False)
 
 
 @pytest.fixture
@@ -68,6 +50,23 @@ async def session(migrated_database_url: str) -> AsyncIterator[AsyncSession]:
             await outer.rollback()
     finally:
         await engine.dispose()
+
+
+@pytest.fixture
+async def store(session: AsyncSession) -> Store:
+    """테스트 트랜잭션 안의 기본 매장. 테스트가 끝나면 롤백된다."""
+    return await create_store(session)
+
+
+@pytest.fixture
+async def scratch_database() -> AsyncIterator[str]:
+    """스키마가 전혀 없는 빈 DB. 마이그레이션을 단계별로 올리고 내리는 테스트가 쓴다."""
+    url = scratch_database_url()
+    await recreate_database(url)
+    try:
+        yield url.render_as_string(hide_password=False)
+    finally:
+        await drop_database_if_exists(url)
 
 
 @pytest.fixture

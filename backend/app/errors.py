@@ -36,6 +36,13 @@ class ServiceUnavailableError(AppError):
     code = "SERVICE_UNAVAILABLE"
 
 
+class StoreNotConfiguredError(AppError):
+    """DEFAULT_STORE_SLUG에 해당하는 매장이 DB에 없다. seed 스크립트를 실행하지 않았을 때 발생한다."""
+
+    status_code = 503
+    code = "STORE_NOT_CONFIGURED"
+
+
 def _error_response(
     status_code: int,
     code: str,

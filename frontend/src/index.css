@@ -66,6 +66,14 @@ body {
   background: #e03131;
 }
 
+.store-banner {
+  padding: 10px 24px;
+  color: #8a1c1c;
+  background: #fdecec;
+  border-bottom: 1px solid #f5c2c2;
+  font-size: 14px;
+}
+
 .app-main {
   max-width: 960px;
   margin: 0 auto;

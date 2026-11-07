@@ -7,12 +7,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import EscalationReason, Message, SupportTicket, TicketStatus, utcnow
-from tests.factories import create_conversation, create_knowledge, create_message, create_ticket
+from app.models import EscalationReason, Message, Store, SupportTicket, TicketStatus, utcnow
+from tests.factories import create_conversation, create_knowledge, create_message, create_store, create_ticket
 
 
-async def test_create_and_get_ticket(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_create_and_get_ticket(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     message = await create_message(session, conversation)
     created = await create_ticket(session, conversation, source_message=message, question="주차 가능 여부")
     session.expunge_all()
@@ -25,8 +25,8 @@ async def test_create_and_get_ticket(session: AsyncSession) -> None:
     assert found.escalation_reason == EscalationReason.NO_KNOWLEDGE
 
 
-async def test_ticket_defaults_to_open(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_ticket_defaults_to_open(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     created = await create_ticket(session, conversation)
     session.expunge_all()
 
@@ -38,8 +38,8 @@ async def test_ticket_defaults_to_open(session: AsyncSession) -> None:
     assert found.created_at.utcoffset() == timedelta(0)
 
 
-async def test_list_open_tickets_oldest_first(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_list_open_tickets_oldest_first(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     first = await create_ticket(session, conversation, question="첫 문의")
     second = await create_ticket(session, conversation, question="둘째 문의")
     done = await create_ticket(session, conversation, question="처리된 문의")
@@ -59,8 +59,8 @@ async def test_list_open_tickets_oldest_first(session: AsyncSession) -> None:
     assert [t.id for t in found] == [first.id, second.id]
 
 
-async def test_resolve_ticket_persists_answer(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_resolve_ticket_persists_answer(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     ticket = await create_ticket(session, conversation)
 
     ticket.owner_answer = "주차는 건물 지하 1층에 가능합니다."
@@ -76,8 +76,8 @@ async def test_resolve_ticket_persists_answer(session: AsyncSession) -> None:
     assert found.resolved_at.utcoffset() == timedelta(0)
 
 
-async def test_resolved_ticket_requires_answer_and_time(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_resolved_ticket_requires_answer_and_time(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     ticket = await create_ticket(session, conversation)
 
     ticket.status = TicketStatus.RESOLVED
@@ -86,9 +86,10 @@ async def test_resolved_ticket_requires_answer_and_time(session: AsyncSession) -
         await session.flush()
 
 
-async def test_ticket_requires_existing_conversation(session: AsyncSession) -> None:
+async def test_ticket_requires_existing_conversation(session: AsyncSession, store: Store) -> None:
     session.add(
         SupportTicket(
+            store_id=store.id,
             conversation_id=uuid.uuid4(),
             question="고아 티켓",
             escalation_reason=EscalationReason.NO_KNOWLEDGE,
@@ -99,8 +100,8 @@ async def test_ticket_requires_existing_conversation(session: AsyncSession) -> N
         await session.flush()
 
 
-async def test_one_message_cannot_create_two_tickets(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_one_message_cannot_create_two_tickets(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     message = await create_message(session, conversation)
     await create_ticket(session, conversation, source_message=message)
 
@@ -108,8 +109,8 @@ async def test_one_message_cannot_create_two_tickets(session: AsyncSession) -> N
         await create_ticket(session, conversation, source_message=message)
 
 
-async def test_tickets_without_source_message_can_coexist(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_tickets_without_source_message_can_coexist(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
 
     await create_ticket(session, conversation, source_message=None)
     await create_ticket(session, conversation, source_message=None)
@@ -118,8 +119,8 @@ async def test_tickets_without_source_message_can_coexist(session: AsyncSession)
     assert len(found) == 2
 
 
-async def test_deleting_source_message_keeps_ticket(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_deleting_source_message_keeps_ticket(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     message = await create_message(session, conversation)
     ticket = await create_ticket(session, conversation, source_message=message)
 
@@ -130,8 +131,8 @@ async def test_deleting_source_message_keeps_ticket(session: AsyncSession) -> No
     assert found.source_message_id is None
 
 
-async def test_ticket_relationships_load_explicitly(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_ticket_relationships_load_explicitly(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     message = await create_message(session, conversation)
     ticket = await create_ticket(session, conversation, source_message=message)
     session.expunge_all()
@@ -153,10 +154,10 @@ async def test_ticket_relationships_load_explicitly(session: AsyncSession) -> No
     assert loaded.knowledge_entry is None
 
 
-async def test_ticket_links_to_its_knowledge_entry(session: AsyncSession) -> None:
-    conversation = await create_conversation(session)
+async def test_ticket_links_to_its_knowledge_entry(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
     ticket = await create_ticket(session, conversation)
-    entry = await create_knowledge(session, ticket=ticket)
+    entry = await create_knowledge(session, store, ticket=ticket)
     session.expunge_all()
 
     loaded = await session.scalar(
@@ -168,3 +169,32 @@ async def test_ticket_links_to_its_knowledge_entry(session: AsyncSession) -> Non
     assert loaded is not None
     assert loaded.knowledge_entry is not None
     assert loaded.knowledge_entry.id == entry.id
+
+
+async def test_ticket_requires_existing_store(session: AsyncSession, store: Store) -> None:
+    conversation = await create_conversation(session, store)
+    session.add(
+        SupportTicket(
+            store_id=uuid.uuid4(),
+            conversation_id=conversation.id,
+            question="매장 없는 티켓",
+            escalation_reason=EscalationReason.NO_KNOWLEDGE,
+        )
+    )
+
+    with pytest.raises(IntegrityError, match="fk_support_tickets_store_id_stores"):
+        await session.flush()
+
+
+async def test_open_tickets_are_scoped_to_their_store(session: AsyncSession, store: Store) -> None:
+    other = await create_store(session, slug="other-store")
+    mine = await create_ticket(session, await create_conversation(session, store))
+    await create_ticket(session, await create_conversation(session, other))
+
+    found = (
+        await session.scalars(
+            select(SupportTicket).where(SupportTicket.store_id == store.id, SupportTicket.status == TicketStatus.OPEN)
+        )
+    ).all()
+
+    assert [t.id for t in found] == [mine.id]

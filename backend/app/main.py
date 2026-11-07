@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import health
+from app.api import health, store
 from app.config import get_settings
 from app.db import engine
 from app.errors import register_exception_handlers
@@ -22,3 +22,4 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="AI Store Help", lifespan=lifespan)
 register_exception_handlers(app)
 app.include_router(health.router, prefix="/api")
+app.include_router(store.router, prefix="/api")
