@@ -127,6 +127,8 @@ export default function OwnerTicketsPage() {
   }
 
   const showing = detail !== null && detail.id === selectedId ? detail : null;
+  const listEmpty = tickets !== null && tickets.length === 0;
+  const showDetail = !listEmpty && (selectedId !== null || notice !== null || detailError !== null);
 
   return (
     <div className="owner">
@@ -186,71 +188,72 @@ export default function OwnerTicketsPage() {
         )}
       </section>
 
-      <section className="owner-detail" aria-label="문의 상세">
-        {notice !== null && (
-          <p className="owner-notice" role="status">
-            {notice}
-          </p>
-        )}
-        {selectedId !== null && showing === null && detailError === null && (
-          <p className="chat-empty">문의를 불러오는 중입니다.</p>
-        )}
-        {detailError !== null && showing === null && (
-          <p className="chat-error" role="alert">
-            {detailError}
-          </p>
-        )}
-        {showing !== null && (
-          <>
-            <header className="owner-detail-head">
-              <p>
+      {showDetail && (
+        <section className="owner-detail" aria-label="문의 상세">
+          {notice !== null && (
+            <p className="owner-notice" role="status">
+              {notice}
+            </p>
+          )}
+          {selectedId !== null && showing === null && detailError === null && (
+            <p className="chat-empty">문의를 불러오는 중입니다.</p>
+          )}
+          {detailError !== null && showing === null && (
+            <p className="chat-error" role="alert">
+              {detailError}
+            </p>
+          )}
+          {showing !== null && (
+            <>
+              <header className="owner-detail-head">
                 <span className={`badge badge-${showing.status}`}>{STATUS_LABEL[showing.status]}</span>
-                <span>{REASON_LABEL[showing.escalation_reason]}</span>
+                <span className="owner-reason">{REASON_LABEL[showing.escalation_reason]}</span>
                 <time dateTime={showing.created_at}>{formatDateTime(showing.created_at)} 접수</time>
-              </p>
-            </header>
-            <h2>전달된 질문</h2>
-            <p className="owner-question">{showing.question}</p>
-            {showing.status === "resolved" && showing.owner_answer !== null && (
-              <div className="owner-answer">
-                <h3>등록된 답변</h3>
-                <p>{showing.owner_answer}</p>
-                {showing.resolved_at !== null && (
-                  <time dateTime={showing.resolved_at}>{formatDateTime(showing.resolved_at)} 등록</time>
-                )}
-              </div>
-            )}
-            {showing.status === "open" && (
-              <form className="owner-form" onSubmit={onSubmit}>
-                <label htmlFor="owner-answer">답변</label>
-                <p className="chat-note">고객 대화에 AI 답변으로 전달되고, 이후 비슷한 질문에 쓰이는 지식으로 저장됩니다.</p>
-                <textarea
-                  id="owner-answer"
-                  value={draft}
-                  maxLength={MAX_ANSWER_LENGTH}
-                  rows={4}
-                  placeholder="고객에게 전달할 답변을 입력하세요"
-                  disabled={sending}
-                  onChange={(event) => setDraft(event.target.value)}
-                />
-                <div className="owner-form-bar">
-                  <span>
-                    {draft.trim().length}/{MAX_ANSWER_LENGTH}
-                  </span>
-                  <button type="submit" disabled={sending || draft.trim() === ""}>
-                    {sending ? "등록 중" : "답변 등록"}
-                  </button>
+              </header>
+              <h2 className="owner-question">{showing.question}</h2>
+              {showing.status === "resolved" && showing.owner_answer !== null && (
+                <div className="owner-answer">
+                  <h3>등록된 답변</h3>
+                  <p>{showing.owner_answer}</p>
+                  {showing.resolved_at !== null && (
+                    <time dateTime={showing.resolved_at}>{formatDateTime(showing.resolved_at)} 등록</time>
+                  )}
                 </div>
-                {replyError !== null && (
-                  <p className="chat-error" role="alert">
-                    {replyError}
+              )}
+              {showing.status === "open" && (
+                <form className="owner-form" onSubmit={onSubmit}>
+                  <label htmlFor="owner-answer">답변</label>
+                  <p className="chat-note">
+                    고객 대화에 AI 답변으로 전달되고, 이후 비슷한 질문에 쓰이는 지식으로 저장됩니다.
                   </p>
-                )}
-              </form>
-            )}
-          </>
-        )}
-      </section>
+                  <textarea
+                    id="owner-answer"
+                    value={draft}
+                    maxLength={MAX_ANSWER_LENGTH}
+                    rows={4}
+                    placeholder="고객에게 전달할 답변을 입력하세요"
+                    disabled={sending}
+                    onChange={(event) => setDraft(event.target.value)}
+                  />
+                  <div className="owner-form-bar">
+                    <span>
+                      {draft.trim().length}/{MAX_ANSWER_LENGTH}
+                    </span>
+                    <button type="submit" disabled={sending || draft.trim() === ""}>
+                      {sending ? "등록 중" : "답변 등록"}
+                    </button>
+                  </div>
+                  {replyError !== null && (
+                    <p className="chat-error" role="alert">
+                      {replyError}
+                    </p>
+                  )}
+                </form>
+              )}
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }
