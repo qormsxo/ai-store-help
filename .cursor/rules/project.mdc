@@ -18,6 +18,8 @@ alwaysApply: true
 - **비즈니스 로직과 API 라우터를 분리한다.** 라우터(`app/api/`)는 요청 파싱, 서비스 호출, 응답 변환만 한다. 로직과 DB 접근은 `app/services/`에 둔다. 서비스는 `AsyncSession`을 인자로 받는다.
 - 에러는 `app/errors.py`의 `AppError` 하위 예외로 던지고, 응답은 `{"error": {"code", "message"}}` 형식을 유지한다.
 - 불필요한 추상화(Repository 계층, DI 컨테이너)와 불필요한 패키지를 추가하지 않는다.
+- **anti-slop 린터를 통과해야 한다.** 작업을 마치기 전에 `backend/`에서 `python tools/anti_slop`을 실행한다. `Any`/`object` 타입, `cast`, `type: ignore`로 우회하지 말고 도메인 타입을 선언한다. 규칙을 `off`로 끄거나 `anti-slop: ignore`로 조용하게 만들지 않는다.
+- **모델을 바꾸면 Alembic 마이그레이션을 함께 만든다.** 새 PostgreSQL enum은 `downgrade`에서 `DROP TYPE`까지 처리한다. `tests/test_migrations.py`가 모델과 마이그레이션의 불일치를 잡는다.
 
 ## Frontend (TypeScript)
 

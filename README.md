@@ -3,7 +3,7 @@
 소규모 사업자의 고객 문의를 AI가 응대하고, AI가 답할 수 없는 문의는 사장에게 전달하는 서비스.
 사장의 답변은 지식 DB에 쌓여서 이후 유사한 문의에 AI가 자동 응답한다.
 
-> 현재 상태: **프로젝트 기반 설정 단계**. Health Check, 라우팅, 공통 레이아웃만 있고 Agent와 업무 기능은 아직 없다.
+> 현재 상태: **기반 설정 + DB 모델 단계**. Health Check, 라우팅, 공통 레이아웃, DB 모델/마이그레이션까지 있고 Agent와 업무 기능은 아직 없다.
 
 ## 기술 스택
 
@@ -64,6 +64,23 @@ npm run dev
 
 로컬 실행에서는 `DATABASE_URL`이 `localhost`를 가리켜야 한다 (`.env.example` 기본값).
 
+## 데이터베이스와 마이그레이션
+
+테이블 4개: `conversations`, `messages`, `support_tickets`, `knowledge_entries` (모델: `backend/app/models.py`).
+Knowledge DB는 비어 있는 상태로 시작한다. Seed 데이터는 없다.
+
+Docker Compose의 backend는 기동할 때 `alembic upgrade head`를 자동 실행한다. 수동 실행은 다음과 같다.
+
+```bash
+cd backend                       # 컨테이너에서는 docker compose exec backend <명령>
+alembic upgrade head             # 최신 스키마 적용
+alembic downgrade base           # 전부 되돌리기
+alembic revision --autogenerate -m "설명"   # 모델 변경 후 마이그레이션 생성 (생성된 파일은 꼭 검토)
+alembic check                    # 모델과 DB 스키마가 어긋났는지 확인
+```
+
+주의: `downgrade`는 테이블뿐 아니라 PostgreSQL enum 타입도 지워야 다시 `upgrade`할 수 있다. 새 enum을 추가하면 마이그레이션의 `downgrade`에 `DROP TYPE`을 직접 넣는다.
+
 ## 테스트
 
 ```bash
@@ -72,6 +89,22 @@ pytest
 # 또는 컨테이너 안에서
 docker compose exec backend pytest
 ```
+
+- DB 테스트는 개발 DB와 같은 서버의 `<DB이름>_test` 데이터베이스를 쓴다 (없으면 자동 생성). 개발 데이터는 건드리지 않는다.
+- 테스트 세션 시작 때 `alembic downgrade base` → `upgrade head`를 실행하므로 마이그레이션도 함께 검증된다.
+- 테스트마다 트랜잭션을 롤백해서 서로 영향을 주지 않는다.
+- `tests/test_migrations.py`는 모델과 마이그레이션이 어긋나면 실패한다. 모델을 고치면 마이그레이션을 같이 만든다.
+
+## 코드 품질 검사 (anti-slop)
+
+`Any`/`object` 타입, `cast`, `type: ignore` 같은 우회 수단을 막는 린터다. 커밋 전에 실행한다.
+
+```bash
+cd backend
+python tools/anti_slop
+```
+
+설정은 `backend/pyproject.toml`의 `[tool.anti-slop]`에 있다.
 
 ## 환경변수
 
@@ -98,11 +131,14 @@ ai-store-help/
       main.py                   # FastAPI 앱, 라우터 등록
       config.py                 # 환경변수 설정 (pydantic-settings)
       db.py                     # async 엔진, 세션
+      models.py                 # SQLAlchemy 모델과 enum
       errors.py                 # 공통 예외와 에러 응답 형식
       schemas.py                # Pydantic 스키마
       api/                      # 라우터 (요청/응답 처리만)
       services/                 # 비즈니스 로직
+    alembic/                    # 마이그레이션 (env.py는 async)
     tests/
+    tools/anti_slop/            # 코드 품질 린터 (vendored)
   frontend/
     src/
       App.tsx                   # 라우팅 (/chat, /owner)
