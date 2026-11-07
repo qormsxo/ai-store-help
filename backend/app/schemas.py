@@ -1,8 +1,10 @@
 import uuid
-from datetime import time
-from typing import Literal
+from datetime import datetime, time
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StringConstraints
+
+from app.models import ConversationStatus, EscalationReason, MessageRole, TicketStatus
 
 
 class HealthResponse(BaseModel):
@@ -34,6 +36,114 @@ class StoreResponse(BaseModel):
     website: str | None
     timezone: str
     business_hours: list[BusinessHourResponse]
+
+
+MAX_MESSAGE_LENGTH = 2000
+
+
+class ConversationCreate(BaseModel):
+    # 브라우저가 만든 익명 방문자 식별자. 인증 수단이 아니다.
+    visitor_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+
+
+class ConversationSummaryResponse(BaseModel):
+    """대화 목록의 한 줄. 마지막 고객/AI 메시지 앞부분만 담는다."""
+
+    id: uuid.UUID
+    visitor_id: str
+    status: ConversationStatus
+    created_at: datetime
+    last_message: str | None
+
+
+class ConversationResponse(BaseModel):
+    """고객에게 보여줄 대화 정보. 매장 id는 노출하지 않는다."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    visitor_id: str
+    status: ConversationStatus
+    created_at: datetime
+
+
+class MessageCreate(BaseModel):
+    content: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_MESSAGE_LENGTH)]
+
+
+class MessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    role: MessageRole
+    content: str
+    created_at: datetime
+
+
+class SendMessageResponse(BaseModel):
+    user_message: MessageResponse
+    assistant_message: MessageResponse
+
+
+class MessageDeltaEvent(BaseModel):
+    """SSE message_delta: AI가 방금 생성한 텍스트 조각. 이어 붙이면 답변이 된다."""
+
+    text: str
+
+
+class CompletedEvent(BaseModel):
+    """SSE completed: 답변 전체가 Assistant 메시지 하나로 저장되었다."""
+
+    message_id: uuid.UUID
+
+
+class StreamErrorEvent(BaseModel):
+    """SSE error: 스트림 도중 실패. 일반 오류 응답과 같은 code와 안전한 message만 담는다."""
+
+    code: str
+    message: str
+
+
+MAX_ANSWER_LENGTH = 2000
+
+
+class TicketResponse(BaseModel):
+    """사장에게 보여줄 문의 한 건."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    status: TicketStatus
+    # AI가 고객 메시지를 사장에게 보내기 좋게 다시 쓴 질문. 지식으로 저장될 때 질문이 된다.
+    question: str
+    escalation_reason: EscalationReason
+    conversation_id: uuid.UUID
+    owner_answer: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class TicketConversationResponse(ConversationResponse):
+    messages: list[MessageResponse]
+
+
+class TicketDetailResponse(TicketResponse):
+    # 문의가 만들어진 고객 메시지. 메시지가 정리되어 없을 수 있다.
+    source_message_id: uuid.UUID | None
+    conversation: TicketConversationResponse
+
+
+class OwnerReplyCreate(BaseModel):
+    answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ANSWER_LENGTH)]
+
+
+class OwnerReplyResponse(BaseModel):
+    ticket: TicketResponse
+    knowledge_entry_id: uuid.UUID
+    # 같은 질문의 지식이 이미 있어서 이번 답변으로 대체(비활성화)된 지식. 없으면 null.
+    superseded_knowledge_id: uuid.UUID | None
+    # 고객 대화에 추가된 답변 메시지
+    conversation_message: MessageResponse
 
 
 class StoreInfoItem(BaseModel):

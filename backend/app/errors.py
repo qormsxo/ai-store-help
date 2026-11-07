@@ -51,6 +51,14 @@ class ConversationClosedError(ConflictError):
     code = "CONVERSATION_CLOSED"
 
 
+class TicketNotFoundError(NotFoundError):
+    code = "TICKET_NOT_FOUND"
+
+
+class TicketAlreadyResolvedError(ConflictError):
+    code = "TICKET_ALREADY_RESOLVED"
+
+
 class LLMNotConfiguredError(AppError):
     """GEMINI_API_KEY/GEMINI_MODEL이 없거나, 키 또는 모델이 Gemini에서 거부되었다."""
 
@@ -80,6 +88,13 @@ class LLMRequestError(AppError):
 
     status_code = 502
     code = "LLM_REQUEST_FAILED"
+
+
+class MessageStorageError(AppError):
+    """메시지를 DB에 저장하지 못했다. 고객은 같은 메시지를 다시 보내면 된다."""
+
+    status_code = 503
+    code = "MESSAGE_SAVE_FAILED"
 
 
 class AgentLimitExceededError(AppError):

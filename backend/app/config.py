@@ -1,6 +1,7 @@
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     # 이 실행 환경이 응대하는 매장. 요청이나 LLM이 아니라 서버 설정으로만 정해진다.
     default_store_slug: str = "oak-pine-demo"
 
+    # mock이면 Gemini를 호출하지 않고 정해진 문장을 스트리밍한다. 실제 모델은 gemini.
+    llm_provider: Literal["gemini", "mock"] = "gemini"
     # Gemini. 키와 모델은 코드에 기본값을 두지 않는다. 없으면 Agent 호출 시 LLM_NOT_CONFIGURED 오류가 난다.
     gemini_api_key: SecretStr | None = None
     gemini_model: str | None = None

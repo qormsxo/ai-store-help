@@ -1,0 +1,147 @@
+import logging
+import uuid
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from dataclasses import dataclass
+
+import anyio
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agent.service import AgentReply, AgentService, ToolExecution
+from app.errors import AgentEmptyResponseError, MessageStorageError
+from app.llm.types import TextDelta
+from app.models import Conversation, Message, MessageRole
+from app.services import conversation_service
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ChatResult:
+    user_message: Message
+    assistant_message: Message
+    tool_executions: list[ToolExecution]
+
+
+@dataclass(frozen=True)
+class StoredCustomerMessage:
+    """저장(커밋)이 끝난 고객 메시지와 그 대화. 이 뒤의 어떤 실패도 이 메시지를 지우지 않는다."""
+
+    conversation: Conversation
+    message: Message
+
+
+@dataclass(frozen=True)
+class ReplyCompleted:
+    """스트리밍 답변이 Assistant 메시지 하나로 저장(커밋)되었다."""
+
+    assistant_message: Message
+    tool_executions: list[ToolExecution]
+
+
+type ChatStreamEvent = TextDelta | ReplyCompleted
+
+
+async def save_customer_message(
+    session: AsyncSession, store_id: uuid.UUID, conversation_id: uuid.UUID, content: str
+) -> StoredCustomerMessage:
+    """고객 메시지를 저장하고 바로 커밋한다. 이후 무엇이 실패해도 고객이 보낸 원문은 남는다.
+
+    답변 생성에 실패한 뒤 고객이 같은 메시지를 다시 보내면 메시지를 새로 저장하지 않고 남아 있는 메시지로 재시도한다.
+    """
+    conversation = await conversation_service.get_open_conversation(session, store_id, conversation_id)
+    try:
+        user_message = await conversation_service.get_or_add_user_message(session, conversation, content)
+        await session.commit()
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise _storage_error("customer message", conversation_id, exc) from exc
+    return StoredCustomerMessage(conversation, user_message)
+
+
+async def send_message(
+    session: AsyncSession,
+    agent: AgentService,
+    store_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    content: str,
+    history_limit: int = conversation_service.HISTORY_LIMIT,
+) -> ChatResult:
+    """고객 메시지를 저장하고, Agent가 만든 답변을 저장해서 돌려준다. 이 함수가 커밋한다.
+
+    트랜잭션을 둘로 나눈다.
+    1. 고객 메시지를 저장하고 바로 커밋한다(save_customer_message).
+    2. Agent를 실행하고, 답변과 Tool이 만든 티켓을 함께 커밋한다. 실패하면 이 단계만 롤백한다.
+       그래서 답변 없는 티켓이나 티켓 없는 안내 답변이 남지 않는다.
+    """
+    stored = await save_customer_message(session, store_id, conversation_id, content)
+    conversation, user_message = stored.conversation, stored.message
+
+    try:
+        history = await conversation_service.get_recent_dialogue(session, conversation, user_message, history_limit)
+        reply = await agent.reply(session, conversation, user_message, history)
+        assistant_message = await conversation_service.add_message(
+            session, conversation, MessageRole.ASSISTANT, reply.content
+        )
+        await session.commit()
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise _storage_error("assistant reply", conversation_id, exc) from exc
+    except Exception:
+        # Agent와 LLM 오류는 그대로 올린다. 오류 응답으로 바꾸는 것은 예외 핸들러의 몫이다.
+        await session.rollback()
+        raise
+
+    return ChatResult(user_message, assistant_message, reply.tool_executions)
+
+
+async def stream_reply(
+    session: AsyncSession,
+    agent: AgentService,
+    stored: StoredCustomerMessage,
+    history_limit: int = conversation_service.HISTORY_LIMIT,
+) -> AsyncGenerator[ChatStreamEvent]:
+    """send_message의 2단계를 스트리밍으로 한다. 답변 텍스트를 TextDelta로 내보내고, 저장하면 ReplyCompleted를 낸다.
+
+    답변은 끝까지 생성된 뒤에 Assistant 메시지 하나로 저장한다. 조각마다 저장하지 않는다.
+    생성이 실패하거나 호출하는 쪽이 중간에 멈추면(연결 종료) 저장하지 않고 롤백한다. 불완전한 답변이 완료된
+    메시지로 남지 않고, Tool이 만든 티켓도 함께 사라진다. 고객 메시지는 1단계에서 이미 커밋되어 남는다.
+    """
+    conversation_id = stored.conversation.id
+    committed = False
+    try:
+        history = await conversation_service.get_recent_dialogue(
+            session, stored.conversation, stored.message, history_limit
+        )
+        reply: AgentReply | None = None
+        async with aclosing(agent.reply_stream(session, stored.conversation, stored.message, history)) as events:
+            async for event in events:
+                match event:
+                    case TextDelta():
+                        yield event
+                    case AgentReply():
+                        reply = event
+        if reply is None:
+            raise AgentEmptyResponseError("AI가 답변을 만들지 못했습니다. 다시 시도해 주세요.")
+        # 답변을 다 받은 뒤의 저장은 취소로 끊기지 않게 한다. 커밋 도중에 끊기면 연결 상태가 어긋날 수 있다.
+        with anyio.CancelScope(shield=True):
+            assistant_message = await conversation_service.add_message(
+                session, stored.conversation, MessageRole.ASSISTANT, reply.content
+            )
+            await session.commit()
+        committed = True
+    except SQLAlchemyError as exc:
+        raise _storage_error("assistant reply", conversation_id, exc) from exc
+    finally:
+        if not committed:
+            # 오류와 취소 모두 여기로 온다. 취소 중에도 롤백은 끝까지 해서 연결을 깨끗하게 돌려준다.
+            with anyio.CancelScope(shield=True):
+                await session.rollback()
+    yield ReplyCompleted(assistant_message, reply.tool_executions)
+
+
+def _storage_error(what: str, conversation_id: uuid.UUID, exc: SQLAlchemyError) -> MessageStorageError:
+    # SQL 파라미터에 고객 문장이 들어 있을 수 있어 예외 메시지 대신 종류만 남긴다.
+    logger.error("Failed to save %s: conversation=%s error=%s", what, conversation_id, type(exc).__name__)
+    return MessageStorageError("메시지를 저장하지 못했습니다. 같은 메시지를 다시 보내 주세요.")

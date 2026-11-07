@@ -1,7 +1,7 @@
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import Protocol
 
-from app.llm.types import ModelTurn, ToolDefinition, Turn
+from app.llm.types import ModelTurn, StreamItem, ToolDefinition, Turn
 
 
 class LLMProvider(Protocol):
@@ -13,5 +13,15 @@ class LLMProvider(Protocol):
     async def generate(
         self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
     ) -> ModelTurn: ...
+
+    def generate_stream(
+        self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
+    ) -> AsyncGenerator[StreamItem]:
+        """generate와 같은 호출을 스트리밍으로 한다.
+
+        텍스트가 생성되는 대로 TextDelta를 내보내고, 마지막에 항상 완성된 ModelTurn을 한 번 내보낸다.
+        Function Call은 TextDelta로 나오지 않고 마지막 ModelTurn의 tool_calls에만 담긴다.
+        """
+        ...
 
     async def aclose(self) -> None: ...

@@ -4,12 +4,22 @@
 Tool 실행 순서는 이 스크립트가 아니라 AgentService와 ToolDispatcher가 응답을 처리하면서 정해진다.
 """
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass, field
 
 from pydantic import JsonValue
 
-from app.llm.types import ModelTurn, ToolCall, ToolDefinition, ToolResult, ToolResultTurn, Turn
+from app.llm.types import (
+    ModelTurn,
+    StreamItem,
+    TextDelta,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+    ToolResultTurn,
+    Turn,
+)
 
 
 @dataclass(frozen=True)
@@ -21,25 +31,81 @@ class RecordedRequest:
 
 
 @dataclass
+class Chunks:
+    """스트리밍 응답 한 번을 조각 단위로 적은 스크립트. generate_stream에서만 쓴다.
+
+    steps의 문자열은 모델이 생성한 텍스트 조각, Exception은 그 지점에서 발생하는 오류,
+    asyncio.Event는 테스트가 set할 때까지 스트림을 멈춘다(생성 도중인 상태를 만든다).
+    """
+
+    steps: list[str | Exception | asyncio.Event]
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+@dataclass
 class MockGeminiProvider:
-    responses: list[ModelTurn | Exception]
+    """responses를 요청마다 하나씩 소비한다. generate와 generate_stream이 같은 목록을 쓴다.
+
+    generate_stream에서 ModelTurn은 텍스트를 조각 하나로 내보내고, 여러 조각이 필요하면 Chunks를 쓴다.
+    """
+
+    responses: list[ModelTurn | Exception | Chunks]
     requests: list[RecordedRequest] = field(default_factory=list)
     closed: bool = False
+    # 스트림이 끝까지 가지 못하고 닫히거나 취소된 횟수(연결 종료 테스트용)
+    interrupted_streams: int = 0
 
     async def generate(
         self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
     ) -> ModelTurn:
-        self.requests.append(RecordedRequest(system_instruction, tuple(turns), tuple(tools)))
-        if not self.responses:
-            raise AssertionError("MockGeminiProvider: 준비된 응답이 더 없습니다.")
-        match self.responses.pop(0):
+        match self._next(system_instruction, turns, tools):
             case Exception() as error:
                 raise error
             case ModelTurn() as turn:
                 return turn
+            case Chunks():
+                raise AssertionError("Chunks는 generate_stream에서만 쓸 수 있습니다.")
+
+    async def generate_stream(
+        self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
+    ) -> AsyncGenerator[StreamItem]:
+        response = self._next(system_instruction, turns, tools)
+        finished = False
+        try:
+            match response:
+                case Exception() as error:
+                    raise error
+                case ModelTurn(text=text) as turn:
+                    if text:
+                        yield TextDelta(text=text)
+                    yield turn
+                case Chunks(steps=steps, tool_calls=tool_calls):
+                    texts: list[str] = []
+                    for step in steps:
+                        match step:
+                            case str():
+                                texts.append(step)
+                                yield TextDelta(text=step)
+                            case Exception():
+                                raise step
+                            case asyncio.Event():
+                                await step.wait()
+                    yield ModelTurn(text="".join(texts) or None, tool_calls=tool_calls, finish_reason="STOP")
+            finished = True
+        finally:
+            if not finished:
+                self.interrupted_streams += 1
 
     async def aclose(self) -> None:
         self.closed = True
+
+    def _next(
+        self, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
+    ) -> ModelTurn | Exception | Chunks:
+        self.requests.append(RecordedRequest(system_instruction, tuple(turns), tuple(tools)))
+        if not self.responses:
+            raise AssertionError("MockGeminiProvider: 준비된 응답이 더 없습니다.")
+        return self.responses.pop(0)
 
 
 def function_call(name: str, call_id: str | None = None, **arguments: JsonValue) -> ModelTurn:

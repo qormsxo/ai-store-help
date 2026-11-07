@@ -3,6 +3,7 @@
 from typing import get_args
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,9 @@ from app.models import (
     TicketStatus,
 )
 from app.schemas import ErrorResponse, StoreProfile
+from app.services import chat_service
+from app.services.chat_service import ChatResult
+from app.services.conversation_service import HISTORY_LIMIT
 from tests.factories import create_conversation, create_knowledge, create_message, create_store
 from tests.mock_llm import (
     MockGeminiProvider,
@@ -58,7 +62,21 @@ async def store(session: AsyncSession) -> Store:
     return store
 
 
+async def ask(
+    agent: AgentService,
+    session: AsyncSession,
+    store: Store,
+    conversation: Conversation,
+    text: str,
+    history_limit: int = HISTORY_LIMIT,
+) -> ChatResult:
+    """실제 채팅 흐름(고객 메시지 저장 → Agent 실행 → 답변 저장)으로 Agent를 실행한다."""
+    return await chat_service.send_message(session, agent, store.id, conversation.id, text, history_limit)
+
+
 async def messages_of(session: AsyncSession, conversation: Conversation) -> list[Message]:
+    # 실패한 요청은 롤백하면서 세션의 ORM 객체를 만료시킨다. async에서는 암묵적 재조회가 안 되므로 먼저 새로고침한다.
+    await session.refresh(conversation)
     result = await session.scalars(
         select(Message).where(Message.conversation_id == conversation.id).order_by(Message.created_at)
     )
@@ -81,7 +99,7 @@ async def test_store_profile_tool_is_declared_and_executed(
 ) -> None:
     provider = MockGeminiProvider([function_call("get_store_profile"), final_text("1427 Oak Street.")])
 
-    await AgentService(provider).reply(session, store.id, conversation.id, "What is your store address?")
+    await ask(AgentService(provider), session, store, conversation, "What is your store address?")
 
     first = provider.requests[0]
     assert first.system_instruction == SYSTEM_INSTRUCTION
@@ -104,9 +122,9 @@ async def test_scenario_a_answers_from_store_profile_only(
         [function_call("get_store_profile"), final_text("We are at 1427 Oak Street, Portland, OR 97205.")]
     )
 
-    reply = await AgentService(provider).reply(session, store.id, conversation.id, "What is your store address?")
+    reply = await ask(AgentService(provider), session, store, conversation, "What is your store address?")
 
-    assert reply.content == "We are at 1427 Oak Street, Portland, OR 97205."
+    assert reply.assistant_message.content == "We are at 1427 Oak Street, Portland, OR 97205."
     assert [e.name for e in reply.tool_executions] == ["get_store_profile"]
     assert len(provider.requests) == 2
     assert await ticket_count(session) == 0
@@ -115,7 +133,7 @@ async def test_scenario_a_answers_from_store_profile_only(
         (MessageRole.USER, "What is your store address?"),
         (MessageRole.ASSISTANT, "We are at 1427 Oak Street, Portland, OR 97205."),
     ]
-    assert saved[1].id == reply.message_id
+    assert saved[1].id == reply.assistant_message.id
 
 
 # --- 시나리오 B: Knowledge 검색으로 답변 ------------------------------------------------
@@ -135,7 +153,7 @@ async def test_search_knowledge_tool_returns_matching_entry(
         ]
     )
 
-    await AgentService(provider).reply(session, store.id, conversation.id, "Do you allow dogs inside?")
+    await ask(AgentService(provider), session, store, conversation, "Do you allow dogs inside?")
 
     result = observation(provider.requests[2]).results[0]
     assert (result.call_id, result.name, result.is_error) == ("call-search_knowledge", "search_knowledge", False)
@@ -161,10 +179,10 @@ async def test_scenario_b_answers_from_knowledge(
         ]
     )
 
-    reply = await AgentService(provider).reply(session, store.id, conversation.id, "Do you allow dogs inside?")
+    reply = await ask(AgentService(provider), session, store, conversation, "Do you allow dogs inside?")
 
     assert [e.name for e in reply.tool_executions] == ["get_store_profile", "search_knowledge"]
-    assert reply.content == "Only service dogs are allowed inside, but pets are welcome on the patio."
+    assert reply.assistant_message.content == "Only service dogs are allowed inside, but pets are welcome on the patio."
     assert await ticket_count(session) == 0
 
 
@@ -187,9 +205,7 @@ async def test_scenario_c_runs_three_tools_in_order_and_creates_ticket(
         ]
     )
 
-    reply = await AgentService(provider).reply(
-        session, store.id, conversation.id, "Can I get a refund after 60 days?"
-    )
+    reply = await ask(AgentService(provider), session, store, conversation, "Can I get a refund after 60 days?")
 
     # Mock 응답 1~3번은 Function Call, 4번은 최종 텍스트. 모두 소비되었고 LLM 호출은 정확히 4번이다.
     assert provider.responses == []
@@ -225,7 +241,7 @@ async def test_scenario_c_runs_three_tools_in_order_and_creates_ticket(
     assert ticket.question == "Can I get a refund after 60 days?"
     assert ticket.escalation_reason is EscalationReason.NO_KNOWLEDGE
     assert user_message.content == "Can I get a refund after 60 days?"
-    assert assistant_message.content == reply.content
+    assert assistant_message.content == reply.assistant_message.content
 
 
 async def test_context_is_kept_across_tool_rounds(
@@ -239,7 +255,7 @@ async def test_context_is_kept_across_tool_rounds(
     ]
     provider = MockGeminiProvider(list(scripted))
 
-    await AgentService(provider).reply(session, store.id, conversation.id, "Can I get a refund after 60 days?")
+    await ask(AgentService(provider), session, store, conversation, "Can I get a refund after 60 days?")
 
     # 매 호출은 이전 호출의 Context 전체에 (모델 Function Call, Observation)을 덧붙인 것이다.
     for index in range(1, 4):
@@ -273,7 +289,7 @@ async def test_function_call_arguments_reach_the_service(
         ]
     )
 
-    await AgentService(provider).reply(session, store.id, conversation.id, "Parking with EV charging?")
+    await ask(AgentService(provider), session, store, conversation, "Parking with EV charging?")
 
     # query 앞뒤 공백은 Pydantic 검증에서 정리된 뒤 검색에 쓰였다.
     search = KnowledgeSearchOutput.model_validate(observation(provider.requests[1]).results[0].content)
@@ -289,10 +305,22 @@ async def test_escalation_reason_values_match_enum() -> None:
     assert set(get_args(field.annotation)) == {reason.value for reason in EscalationReason}
 
 
+async def test_ticket_question_fits_the_knowledge_question_column() -> None:
+    """티켓의 질문은 사장이 답하면 KnowledgeEntry.question(String(500))이 된다. 더 길면 그 티켓은 해결할 수 없다."""
+    longest = 500
+    for length, valid in ((longest, True), (longest + 1, False)):
+        arguments = {"question": "q" * length, "escalation_reason": "no_knowledge"}
+        if valid:
+            CreateSupportTicketArguments.model_validate(arguments)
+        else:
+            with pytest.raises(ValidationError):
+                CreateSupportTicketArguments.model_validate(arguments)
+
+
 async def test_unregistered_tool_is_blocked(session: AsyncSession, store: Store, conversation: Conversation) -> None:
     provider = MockGeminiProvider([function_call("delete_all_tickets"), final_text("Sorry, I can't do that.")])
 
-    reply = await AgentService(provider).reply(session, store.id, conversation.id, "Hi")
+    reply = await ask(AgentService(provider), session, store, conversation, "Hi")
 
     result = observation(provider.requests[1]).results[0]
     assert result.is_error
@@ -315,7 +343,7 @@ async def test_invalid_arguments_return_error_observation(
 ) -> None:
     provider = MockGeminiProvider([function_call(name, **arguments), final_text("Could you tell me more?")])
 
-    reply = await AgentService(provider).reply(session, store.id, conversation.id, "Refund?")
+    reply = await ask(AgentService(provider), session, store, conversation, "Refund?")
 
     result = observation(provider.requests[1]).results[0]
     assert result.is_error
@@ -323,7 +351,7 @@ async def test_invalid_arguments_return_error_observation(
     assert error.code == "INVALID_ARGUMENTS"
     assert error.details
     # 잘못된 호출 뒤에도 실행은 계속되고, LLM이 다음 행동을 정한다.
-    assert reply.content == "Could you tell me more?"
+    assert reply.assistant_message.content == "Could you tell me more?"
     assert await ticket_count(session) == 0
 
 
@@ -348,7 +376,7 @@ async def test_llm_cannot_pass_internal_ids(
 ) -> None:
     provider = MockGeminiProvider([function_call(name, **arguments), final_text("OK")])
 
-    await AgentService(provider).reply(session, store.id, conversation.id, "Refund?")
+    await ask(AgentService(provider), session, store, conversation, "Refund?")
 
     result = observation(provider.requests[1]).results[0]
     assert error_code(result.content) == "INVALID_ARGUMENTS"
@@ -367,7 +395,7 @@ async def test_retry_after_invalid_arguments_succeeds(
         ]
     )
 
-    reply = await AgentService(provider).reply(session, store.id, conversation.id, "Where do I park?")
+    reply = await ask(AgentService(provider), session, store, conversation, "Where do I park?")
 
     assert [(e.name, e.is_error) for e in reply.tool_executions] == [
         ("search_knowledge", True),
@@ -389,7 +417,7 @@ async def test_tool_call_limit_stops_the_loop(session: AsyncSession, store: Stor
     )
 
     with pytest.raises(AgentLimitExceededError) as exc_info:
-        await AgentService(provider, max_tool_calls=2).reply(session, store.id, conversation.id, "Parking?")
+        await ask(AgentService(provider, max_tool_calls=2), session, store, conversation, "Parking?")
 
     assert exc_info.value.code == "AGENT_LIMIT_EXCEEDED"
     # 한도를 넘는 세 번째 호출은 실행하지 않았고, 최종 답변도 저장하지 않았다.
@@ -413,7 +441,7 @@ async def test_parallel_calls_count_toward_the_limit(
     )
 
     with pytest.raises(AgentLimitExceededError):
-        await AgentService(provider, max_tool_calls=2).reply(session, store.id, conversation.id, "Parking?")
+        await ask(AgentService(provider, max_tool_calls=2), session, store, conversation, "Parking?")
 
 
 async def test_llm_round_limit_prevents_endless_loop(
@@ -423,7 +451,7 @@ async def test_llm_round_limit_prevents_endless_loop(
     provider = MockGeminiProvider([function_call("get_store_profile", call_id=str(i)) for i in range(10)])
 
     with pytest.raises(AgentLimitExceededError):
-        await AgentService(provider, max_llm_rounds=3).reply(session, store.id, conversation.id, "Hi")
+        await ask(AgentService(provider, max_llm_rounds=3), session, store, conversation, "Hi")
 
     assert len(provider.requests) == 3
 
@@ -434,7 +462,7 @@ async def test_response_without_call_or_text_is_an_error(
     provider = MockGeminiProvider([ModelTurn(text="  ", finish_reason="MAX_TOKENS")])
 
     with pytest.raises(AgentEmptyResponseError) as exc_info:
-        await AgentService(provider).reply(session, store.id, conversation.id, "Hi")
+        await ask(AgentService(provider), session, store, conversation, "Hi")
 
     assert exc_info.value.code == "AGENT_EMPTY_RESPONSE"
 
@@ -456,7 +484,7 @@ async def test_tool_failure_becomes_error_observation(
         [function_call("broken_tool"), function_call("get_store_profile"), final_text("We are at 1427 Oak Street.")]
     )
 
-    reply = await AgentService(provider, dispatcher).reply(session, store.id, conversation.id, "Address?")
+    reply = await ask(AgentService(provider, dispatcher), session, store, conversation, "Address?")
 
     failed = observation(provider.requests[1]).results[0]
     assert failed.is_error
@@ -466,14 +494,14 @@ async def test_tool_failure_becomes_error_observation(
     # savepoint 덕분에 DB 오류 뒤에도 같은 세션으로 다음 Tool과 메시지 저장이 된다.
     assert observation(provider.requests[2]).results[0].is_error is False
     assert [m.role for m in await messages_of(session, conversation)] == [MessageRole.USER, MessageRole.ASSISTANT]
-    assert reply.content == "We are at 1427 Oak Street."
+    assert reply.assistant_message.content == "We are at 1427 Oak Street."
 
 
 async def test_llm_timeout_propagates(session: AsyncSession, store: Store, conversation: Conversation) -> None:
     provider = MockGeminiProvider([LLMTimeoutError("timeout")])
 
     with pytest.raises(LLMTimeoutError) as exc_info:
-        await AgentService(provider).reply(session, store.id, conversation.id, "Hi")
+        await ask(AgentService(provider), session, store, conversation, "Hi")
 
     assert exc_info.value.status_code == 504
 
@@ -484,7 +512,7 @@ async def test_llm_rate_limit_in_later_round_propagates(
     provider = MockGeminiProvider([function_call("get_store_profile"), LLMRateLimitedError("rate limited")])
 
     with pytest.raises(LLMRateLimitedError) as exc_info:
-        await AgentService(provider).reply(session, store.id, conversation.id, "Hi")
+        await ask(AgentService(provider), session, store, conversation, "Hi")
 
     assert exc_info.value.status_code == 429
     assert [m.role for m in await messages_of(session, conversation)] == [MessageRole.USER]
@@ -501,7 +529,7 @@ async def test_previous_messages_are_sent_as_context(
     await create_message(session, conversation, "internal note", MessageRole.SYSTEM)
     provider = MockGeminiProvider([final_text("It is $0.50 extra.")])
 
-    await AgentService(provider).reply(session, store.id, conversation.id, "Is it extra?")
+    await ask(AgentService(provider), session, store, conversation, "Is it extra?")
 
     assert provider.requests[0].turns == (
         UserTurn(text="Do you have oat milk?"),
@@ -517,7 +545,7 @@ async def test_history_is_limited_to_recent_messages(
         await create_message(session, conversation, f"question {number}", MessageRole.USER)
     provider = MockGeminiProvider([final_text("OK")])
 
-    await AgentService(provider, history_limit=2).reply(session, store.id, conversation.id, "latest")
+    await ask(AgentService(provider), session, store, conversation, "latest", history_limit=2)
 
     assert provider.requests[0].turns == (
         UserTurn(text="question 3"),
@@ -533,9 +561,9 @@ async def test_conversations_do_not_share_context(session: AsyncSession, store: 
     await create_message(session, second, "B: hello", MessageRole.USER)
 
     first_provider = MockGeminiProvider([final_text("A reply")])
-    await AgentService(first_provider).reply(session, store.id, first.id, "A: follow-up")
+    await ask(AgentService(first_provider), session, store, first, "A: follow-up")
     second_provider = MockGeminiProvider([final_text("B reply")])
-    await AgentService(second_provider).reply(session, store.id, second.id, "B: follow-up")
+    await ask(AgentService(second_provider), session, store, second, "B: follow-up")
 
     assert first_provider.requests[0].turns == (
         UserTurn(text="A: my order number is 1234"),
@@ -557,7 +585,7 @@ async def test_ticket_is_created_once_per_customer_message(
         ]
     )
 
-    await AgentService(provider).reply(session, store.id, conversation.id, "Refund after 60 days?")
+    await ask(AgentService(provider), session, store, conversation, "Refund after 60 days?")
 
     first = TicketCreationOutput.model_validate(observation(provider.requests[1]).results[0].content)
     second = TicketCreationOutput.model_validate(observation(provider.requests[2]).results[0].content)
@@ -572,7 +600,7 @@ async def test_other_store_conversation_is_not_found(session: AsyncSession, stor
     provider = MockGeminiProvider([final_text("never")])
 
     with pytest.raises(ConversationNotFoundError):
-        await AgentService(provider).reply(session, store.id, other_conversation.id, "Hi")
+        await ask(AgentService(provider), session, store, other_conversation, "Hi")
 
     assert provider.requests == []
 
@@ -585,6 +613,6 @@ async def test_closed_conversation_is_rejected(
     provider = MockGeminiProvider([final_text("never")])
 
     with pytest.raises(ConversationClosedError):
-        await AgentService(provider).reply(session, store.id, conversation.id, "Hi")
+        await ask(AgentService(provider), session, store, conversation, "Hi")
 
     assert provider.requests == []

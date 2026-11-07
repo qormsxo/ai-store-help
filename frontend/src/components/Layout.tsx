@@ -4,7 +4,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { fetchHealth, fetchStore, type Store } from "../api/client";
 
 type BackendStatus = "checking" | "ok" | "down";
-type StoreState = { kind: "loading" } | { kind: "ready"; store: Store } | { kind: "missing" };
+export type StoreState = { kind: "loading" } | { kind: "ready"; store: Store } | { kind: "missing" };
 
 const STATUS_LABEL: Record<BackendStatus, string> = {
   checking: "서버 확인 중",
@@ -43,7 +43,7 @@ export default function Layout() {
         </div>
       )}
       <main className="app-main">
-        <Outlet />
+        <Outlet context={storeState} />
       </main>
     </div>
   );

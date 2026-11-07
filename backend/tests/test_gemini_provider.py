@@ -4,9 +4,6 @@ SDK의 generate_content 자리에 가짜 함수를 넣고, 진짜 google-genai �
 APIError)으로 변환, 재시도, 오류 매핑을 확인한다.
 """
 
-import asyncio
-from dataclasses import dataclass, field
-
 import httpx2
 import pytest
 from google.genai import errors, types
@@ -21,64 +18,15 @@ from app.errors import (
 )
 from app.llm.gemini import GeminiProvider
 from app.llm.types import ModelTurn, ToolCall, ToolResult, ToolResultTurn, UserTurn
-
-
-@dataclass(frozen=True)
-class Stall:
-    """응답 대신 이만큼 기다린다(timeout 테스트용)."""
-
-    seconds: float
-
-
-@dataclass(frozen=True)
-class RecordedCall:
-    model: str
-    contents: list[types.Content]
-    config: types.GenerateContentConfig
-
-
-@dataclass
-class FakeGenerateContent:
-    outcomes: list[types.GenerateContentResponse | Exception | Stall]
-    calls: list[RecordedCall] = field(default_factory=list)
-
-    async def __call__(
-        self, *, model: str, contents: list[types.Content], config: types.GenerateContentConfig
-    ) -> types.GenerateContentResponse:
-        self.calls.append(RecordedCall(model, contents, config))
-        match self.outcomes.pop(0):
-            case Stall(seconds=seconds):
-                await asyncio.sleep(seconds)
-                raise AssertionError("timeout이 먼저 나야 한다")
-            case Exception() as error:
-                raise error
-            case types.GenerateContentResponse() as response:
-                return response
-
-
-def provider_with(fake: FakeGenerateContent, *, timeout_seconds: float = 5, max_attempts: int = 3) -> GeminiProvider:
-    return GeminiProvider(
-        fake,
-        model="gemini-test-model",
-        max_output_tokens=1024,
-        timeout_seconds=timeout_seconds,
-        max_attempts=max_attempts,
-        retry_base_delay=0,
-    )
-
-
-def response_with(*parts: types.Part, finish_reason: types.FinishReason = types.FinishReason.STOP) -> types.GenerateContentResponse:
-    return types.GenerateContentResponse(
-        candidates=[types.Candidate(content=types.Content(role="model", parts=list(parts)), finish_reason=finish_reason)]
-    )
-
-
-def api_error(code: int, status: str, message: str = "error") -> errors.APIError:
-    payload = {"error": {"code": code, "message": message, "status": status}}
-    return errors.ServerError(code, payload) if code >= 500 else errors.ClientError(code, payload)
-
-
-TEXT_RESPONSE = response_with(types.Part(text="Hello!"))
+from tests.fake_gemini import (
+    TEXT_RESPONSE,
+    FakeGenerateContent,
+    FakeGenerateContentStream,
+    Stall,
+    api_error,
+    provider_with,
+    response_with,
+)
 
 
 async def generate(provider: GeminiProvider) -> ModelTurn:
@@ -271,7 +219,12 @@ async def test_aclose_closes_the_client() -> None:
         closed.append(True)
 
     provider = GeminiProvider(
-        FakeGenerateContent([]), model="m", max_output_tokens=1, timeout_seconds=1, close=close
+        FakeGenerateContent([]),
+        generate_content_stream=FakeGenerateContentStream([]),
+        model="m",
+        max_output_tokens=1,
+        timeout_seconds=1,
+        close=close,
     )
     await provider.aclose()
 

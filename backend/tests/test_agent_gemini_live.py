@@ -22,8 +22,9 @@ _settings = get_settings()
 pytestmark = [
     pytest.mark.live,
     pytest.mark.skipif(
-        not (_settings.gemini_api_key and _settings.gemini_api_key.get_secret_value() and _settings.gemini_model),
-        reason="GEMINI_API_KEY와 GEMINI_MODEL이 있어야 실제 Gemini 테스트를 실행한다.",
+        _settings.llm_provider != "gemini"
+        or not (_settings.gemini_api_key and _settings.gemini_api_key.get_secret_value() and _settings.gemini_model),
+        reason="LLM_PROVIDER=gemini, GEMINI_API_KEY, GEMINI_MODEL이 있어야 실제 Gemini 테스트를 실행한다.",
     ),
 ]
 

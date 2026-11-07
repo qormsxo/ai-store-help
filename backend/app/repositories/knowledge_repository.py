@@ -1,12 +1,30 @@
 import uuid
 
-from sqlalchemy import Float, func, literal_column, select
+from sqlalchemy import Float, SQLColumnExpression, String, func, literal, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import KnowledgeEntry
 
 # 영어 사전(stemming, 불용어)을 쓴다. dogs와 dog처럼 어형이 다른 표현도 같은 단어로 본다.
 _ENGLISH = literal_column("'english'::regconfig")
+
+
+def _normalized(question: SQLColumnExpression[str]) -> SQLColumnExpression[str]:
+    """중복 지식 방지 인덱스(uq_knowledge_entries_store_active_question)와 같은 정규화: 공백과 대소문자 무시."""
+    return func.lower(func.regexp_replace(func.btrim(question), r"\s+", " ", "g"))
+
+
+async def find_active_entry_by_question(
+    session: AsyncSession, store_id: uuid.UUID, question: str
+) -> KnowledgeEntry | None:
+    """같은 매장에서 같은 질문(공백, 대소문자 무시)으로 활성 상태인 지식. 인덱스 때문에 최대 한 건이다."""
+    return await session.scalar(
+        select(KnowledgeEntry).where(
+            KnowledgeEntry.store_id == store_id,
+            KnowledgeEntry.is_active.is_(True),
+            _normalized(KnowledgeEntry.question) == _normalized(literal(question, String)),
+        )
+    )
 
 
 async def search_active_entries(

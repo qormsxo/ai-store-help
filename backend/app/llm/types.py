@@ -53,6 +53,14 @@ class ModelTurn(BaseModel):
     finish_reason: str | None = None
 
 
+class TextDelta(BaseModel):
+    """스트리밍 중 모델이 방금 생성한 텍스트 조각. 이어 붙이면 그 응답의 text가 된다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+
+
 class ToolResultTurn(BaseModel):
     """Tool 실행 결과(Observation). 직전 ModelTurn의 tool_calls와 순서와 개수가 같다."""
 
@@ -62,3 +70,6 @@ class ToolResultTurn(BaseModel):
 
 
 type Turn = UserTurn | ModelTurn | ToolResultTurn
+
+# 스트리밍 응답의 항목. TextDelta가 생성되는 대로 나오고, 마지막에 완성된 ModelTurn이 한 번 나온다.
+type StreamItem = TextDelta | ModelTurn

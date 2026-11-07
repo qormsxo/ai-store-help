@@ -2,6 +2,7 @@ import logging
 from functools import lru_cache
 
 from app.config import Settings, get_settings
+from app.llm.dev_mock import DevMockProvider
 from app.llm.gemini import create_gemini_provider
 from app.llm.provider import LLMProvider
 
@@ -9,7 +10,9 @@ logger = logging.getLogger(__name__)
 
 
 def create_llm_provider(settings: Settings) -> LLMProvider:
-    """현재 구현된 Provider는 Gemini뿐이다."""
+    """LLM_PROVIDER=mock이면 개발용 가짜를, gemini면 Gemini를 만든다."""
+    if settings.llm_provider == "mock":
+        return DevMockProvider()
     return create_gemini_provider(settings)
 
 

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import health, store
+from app.api import conversations, health, owner, store
 from app.config import get_settings
 from app.db import engine
 from app.errors import LLMNotConfiguredError, register_exception_handlers
@@ -31,3 +31,5 @@ app = FastAPI(title="AI Store Help", lifespan=lifespan)
 register_exception_handlers(app)
 app.include_router(health.router, prefix="/api")
 app.include_router(store.router, prefix="/api")
+app.include_router(conversations.router, prefix="/api")
+app.include_router(owner.router, prefix="/api")

@@ -50,7 +50,8 @@ class SearchKnowledgeArguments(BaseModel):
 class CreateSupportTicketArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)] = Field(
+    # 사장이 답하면 이 질문이 KnowledgeEntry.question(500자)으로 저장된다. 그보다 긴 티켓은 지식이 될 수 없다.
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] = Field(
         description="The customer's question rewritten as a clear, standalone question for the store owner."
     )
     # EscalationReason의 값과 같아야 한다(테스트가 확인한다). enum을 쓰면 JSON Schema에 $ref가 생겨서 Literal로 둔다.

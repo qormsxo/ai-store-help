@@ -8,3 +8,5 @@ tzdata>=2024.2
 google-genai>=3.0
 # google-genai의 전송 계층. 타임아웃과 연결 오류를 잡으려고 직접 import한다.
 httpx2>=2.16
+# 스트리밍 중 취소에도 정리 작업(DB 롤백)을 끝내려고 직접 import한다(FastAPI가 이미 의존한다).
+anyio>=4
