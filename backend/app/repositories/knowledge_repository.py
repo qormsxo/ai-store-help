@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from sqlalchemy import Float, SQLColumnExpression, String, func, literal, literal_column, select
@@ -7,6 +8,17 @@ from app.models import KnowledgeEntry
 
 # 영어 사전(stemming, 불용어)을 쓴다. dogs와 dog처럼 어형이 다른 표현도 같은 단어로 본다.
 _ENGLISH = literal_column("'english'::regconfig")
+_WORD = re.compile(r"[0-9A-Za-z]+")
+
+
+def _any_keyword_query(query: str) -> str:
+    """모델이 준 검색어를 '하나라도 맞으면 찾는' 웹 검색문으로 바꾼다.
+
+    websearch_to_tsquery는 띄어쓴 단어를 모두 포함한 문서만 찾는다. dog-friendly는 한 덩어리로
+    남아 저장된 dog와도 어긋난다. 붙임표와 공백으로 나누고 or로 잇는다.
+    """
+    words = [word for word in _WORD.findall(query) if word.casefold() != "or"]
+    return " or ".join(words)
 
 
 def _normalized(question: SQLColumnExpression[str]) -> SQLColumnExpression[str]:
@@ -32,14 +44,18 @@ async def search_active_entries(
 ) -> list[tuple[KnowledgeEntry, float]]:
     """해당 매장의 활성 지식을 질문과 답변 전체에서 검색해 관련성 높은 순서로 반환한다.
 
+    검색어의 단어가 모두 들어 있을 필요는 없다. 하나라도 맞으면 후보가 되고, 많이 맞을수록 위로 온다.
     질문(A)을 답변(B)보다 높게 가중한다. 사장이 정리한 질문과 맞는 항목이 답변 본문에 단어만
     우연히 들어 있는 항목보다 위로 오게 하기 위해서다.
     """
+    keywords = _any_keyword_query(query)
+    if not keywords:
+        return []
     # setweight의 가중치는 PostgreSQL "char" 타입이라 바인드 파라미터(VARCHAR) 대신 상수 리터럴로 쓴다.
     document = func.setweight(func.to_tsvector(_ENGLISH, KnowledgeEntry.question), literal_column("'A'")).op(
         "||"
     )(func.setweight(func.to_tsvector(_ENGLISH, KnowledgeEntry.answer), literal_column("'B'")))
-    tsquery = func.websearch_to_tsquery(_ENGLISH, query)
+    tsquery = func.websearch_to_tsquery(_ENGLISH, keywords)
     rank = func.ts_rank_cd(document, tsquery, type_=Float)
 
     statement = (

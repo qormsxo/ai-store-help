@@ -22,6 +22,20 @@ async def test_exact_question_match(session: AsyncSession, store: Store) -> None
     assert [r.source_id for r in results] == [entry.id]
 
 
+@pytest.mark.parametrize("query", ["dog-friendly pets inside", "dogs pets allowed inside"])
+async def test_partial_keywords_still_match(session: AsyncSession, store: Store, query: str) -> None:
+    entry = await create_knowledge(
+        session,
+        store,
+        "Are dogs allowed in the store?",
+        "Yes, you are welcome to visit our store with your dog.",
+    )
+
+    results = await knowledge_search_service.search_knowledge(session, store.id, query)
+
+    assert [r.source_id for r in results] == [entry.id]
+
+
 async def test_similar_wording_matches_by_word_form(session: AsyncSession, store: Store) -> None:
     entry = await create_knowledge(
         session, store, "Are dogs allowed on the patio?", "Well-behaved dogs are welcome on the patio."

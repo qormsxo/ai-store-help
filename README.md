@@ -61,7 +61,7 @@ DB 테스트는 `<DB이름>_test`를 쓰고 개발 데이터는 건드리지 않
 | `DEFAULT_STORE_SLUG` | 이 환경의 매장 slug | `oak-pine-demo` |
 | `LLM_PROVIDER` | `mock`은 Gemini를 호출하지 않음. 실제 모델은 `gemini` | compose는 `mock` |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | `gemini`일 때 필수. 없으면 Agent만 503 | 없음 |
-| `GEMINI_MAX_OUTPUT_TOKENS` / `GEMINI_TIMEOUT` | 응답 최대 토큰, 요청 제한(초) | `2048` / `30` |
+| `GEMINI_MAX_OUTPUT_TOKENS` / `GEMINI_TIMEOUT` | 응답 최대 토큰, 다음 조각까지 제한(초) | `2048` / `60` |
 | `APP_ENV` / `LOG_LEVEL` | 실행 환경, 로그 레벨 | `development` / `INFO` |
 | `BACKEND_PORT` / `FRONTEND_PORT` | 호스트 포트 | `8000` / `5173` |
 

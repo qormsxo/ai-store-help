@@ -29,7 +29,7 @@ from app.main import app
 from app.models import Conversation, Message, MessageRole, Store, SupportTicket
 from app.schemas import MAX_MESSAGE_LENGTH
 from app.services.conversation_service import HISTORY_LIMIT
-from tests.factories import create_conversation, create_message, create_store
+from tests.factories import create_conversation, create_knowledge, create_message, create_store
 from tests.fake_gemini import (
     Stall,
     api_error,
@@ -293,6 +293,36 @@ async def test_send_message_saves_user_message_and_assistant_reply(
     ]
     listed = await client.get(f"/api/conversations/{conversation_id}/messages")
     assert [m["id"] for m in listed.json()] == [str(m.id) for m in saved]
+
+
+async def test_same_question_as_stored_knowledge_is_answered_without_a_new_ticket(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    await create_knowledge(
+        session, store, question="Are dogs allowed in the store?", answer="Yes, dogs are welcome."
+    )
+    conversation_id = await start_conversation(client, "visitor-2")
+    provider = MockGeminiProvider(
+        [
+            function_call(
+                "create_support_ticket",
+                question="Are dogs allowed in the store?",
+                escalation_reason="no_knowledge",
+            ),
+            final_text("I've forwarded your question."),
+        ]
+    )
+    use_agent(provider)
+
+    res = await send(client, conversation_id, "are   DOGS allowed in the store?")
+
+    assert_completed(res)
+    assert provider.requests == []
+    assert await ticket_count(session) == 0
+    assert [m.content for m in await stored_messages(session, conversation_id)] == [
+        "are   DOGS allowed in the store?",
+        "Yes, dogs are welcome.",
+    ]
 
 
 # --- 7, 8. 대화 문맥 -----------------------------------------------------------------------------

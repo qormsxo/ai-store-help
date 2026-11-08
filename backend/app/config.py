@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     gemini_model: str | None = None
     gemini_max_output_tokens: int = Field(default=2048, gt=0)
     # 요청 한 번(시도 한 번)의 제한 시간, 초 단위.
-    gemini_timeout: float = Field(default=30, gt=0)
+    gemini_timeout: float = Field(default=60, gt=0)
 
     @field_validator("default_store_slug")
     @classmethod

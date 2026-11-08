@@ -204,6 +204,9 @@ class ToolDispatcher:
     # llm이 요청한 도구 이름과 인자를 받아 실행하고, 결과를 Observation으로 만든다.
     async def dispatch(self, context: AgentContext, call: ToolCall) -> ToolResult:
         started = time.perf_counter()
+        if call.name == "search_knowledge":
+            # 모델이 고른 검색어가 빗나가면 지식이 있어도 빈 결과가 된다. 그 객체를 통째로 남긴다.
+            logger.info("search_knowledge call: %s", call.model_dump(mode="json", exclude={"signature"}))
         content, status = await self._execute(context, call)
         # 인자 값에는 고객이 쓴 문장이 들어갈 수 있으므로 로그에는 인자 이름만 남긴다.
         logger.info(

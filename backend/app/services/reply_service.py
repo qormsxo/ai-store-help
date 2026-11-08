@@ -14,6 +14,7 @@ from app.agent.service import AgentReply, AgentService, ToolExecution
 from app.errors import AgentEmptyResponseError, MessageStorageError
 from app.llm.types import TextDelta
 from app.models import Conversation, Message, MessageRole
+from app.repositories import knowledge_repository
 from app.services import conversation_service
 
 logger = logging.getLogger(__name__)
@@ -71,18 +72,27 @@ async def stream_reply(
     committed = False
     completed: ReplyCompleted | None = None
     try:
-        # 방금 저장한 고객 메세지는 제외하고 최근 대화 내역을 가져온다. 
-        history = await conversation_service.get_recent_dialogue(
-            session, stored.conversation, stored.message, history_limit
-        )
         reply: AgentReply | None = None
-        async with aclosing(agent.reply_stream(session, stored.conversation, stored.message, history)) as events:
-            async for event in events:
-                match event:
-                    case TextDelta():
-                        yield event
-                    case AgentReply():
-                        reply = event
+        # 검색은 모델이 고른 단어로 한다. 단어가 저장된 문장과 어긋나면 결과가 비고, 모델은 지식이 없다고 보고 티켓을 만든다.
+        # 고객 문장이 활성 지식의 질문과 같으면(대소문자, 연속 공백 무시) 그 답을 그대로 쓰고 모델은 부르지 않는다.
+        known = await knowledge_repository.find_active_entry_by_question(
+            session, stored.conversation.store_id, stored.message.content
+        )
+        if known is not None:
+            yield TextDelta(text=known.answer)
+            reply = AgentReply(content=known.answer, tool_executions=[])
+        else:
+            # 방금 저장한 고객 메세지는 제외하고 최근 대화 내역을 가져온다.
+            history = await conversation_service.get_recent_dialogue(
+                session, stored.conversation, stored.message, history_limit
+            )
+            async with aclosing(agent.reply_stream(session, stored.conversation, stored.message, history)) as events:
+                async for event in events:
+                    match event:
+                        case TextDelta():
+                            yield event
+                        case AgentReply():
+                            reply = event
         if reply is None:
             raise AgentEmptyResponseError("AI가 답변을 만들지 못했습니다. 다시 시도해 주세요.")
         # 답변을 다 받은 뒤의 저장은 취소로 끊기지 않게 한다. 커밋 도중에 끊기면 연결 상태가 어긋날 수 있다.
