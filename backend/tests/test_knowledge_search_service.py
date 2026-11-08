@@ -36,6 +36,19 @@ async def test_partial_keywords_still_match(session: AsyncSession, store: Store,
     assert [r.source_id for r in results] == [entry.id]
 
 
+async def test_keyword_matches_inside_a_longer_word(session: AsyncSession, store: Store) -> None:
+    entry = await create_knowledge(
+        session,
+        store,
+        "강아지와 함께 방문할 수 있나요?",
+        "네, 저희 매장은 반려견과 함께 방문하실 수 있습니다.",
+    )
+
+    results = await knowledge_search_service.search_knowledge(session, store.id, "반려견 입장")
+
+    assert [r.source_id for r in results] == [entry.id]
+
+
 async def test_korean_keywords_match(session: AsyncSession, store: Store) -> None:
     entry = await create_knowledge(
         session, store, "매장 안에 강아지 출입이 되나요?", "네, 강아지와 함께 오셔도 됩니다."

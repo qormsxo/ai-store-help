@@ -35,9 +35,9 @@ export interface ConversationSummary extends Conversation {
 
 /** 데모용 손님. 인증이 아니라 같은 사람 대화를 고르는 고정 id다. */
 export const DEMO_VISITORS = [
-  { id: "demo-emma-walsh", name: "Emma Walsh" },
-  { id: "demo-noah-bennett", name: "Noah Bennett" },
-  { id: "demo-priya-shah", name: "Priya Shah" },
+  { id: "demo-emma-walsh", name: "손님 1" },
+  { id: "demo-noah-bennett", name: "손님 2" },
+  { id: "demo-priya-shah", name: "손님 3" },
 ] as const;
 
 export type DemoVisitorId = (typeof DEMO_VISITORS)[number]["id"];
@@ -61,32 +61,33 @@ export class ApiError extends Error {
   }
 }
 
-export async function fetchStore(): Promise<Store> {
-  return request<Store>("/api/store");
+export async function fetchStore(slug?: string): Promise<Store> {
+  const path = slug === undefined ? "/api/store" : storePath(slug, "/store");
+  return request<Store>(path);
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/api/health");
 }
 
-export async function fetchConversations(visitorId: string): Promise<ConversationSummary[]> {
+export async function fetchConversations(slug: string, visitorId: string): Promise<ConversationSummary[]> {
   const query = new URLSearchParams({ visitor_id: visitorId });
-  return request<ConversationSummary[]>(`/api/conversations?${query}`);
+  return request<ConversationSummary[]>(`${storePath(slug, "/conversations")}?${query}`);
 }
 
-export async function createConversation(visitorId: string): Promise<Conversation> {
-  return request<Conversation>("/api/conversations", {
+export async function createConversation(slug: string, visitorId: string): Promise<Conversation> {
+  return request<Conversation>(storePath(slug, "/conversations"), {
     method: "POST",
     body: JSON.stringify({ visitor_id: visitorId }),
   });
 }
 
-export async function fetchConversation(conversationId: string): Promise<Conversation> {
-  return request<Conversation>(`/api/conversations/${conversationId}`);
+export async function fetchConversation(slug: string, conversationId: string): Promise<Conversation> {
+  return request<Conversation>(storePath(slug, `/conversations/${conversationId}`));
 }
 
-export async function fetchMessages(conversationId: string): Promise<ChatMessage[]> {
-  return request<ChatMessage[]>(`/api/conversations/${conversationId}/messages`);
+export async function fetchMessages(slug: string, conversationId: string): Promise<ChatMessage[]> {
+  return request<ChatMessage[]>(storePath(slug, `/conversations/${conversationId}/messages`));
 }
 
 export interface StreamHandlers {
@@ -99,12 +100,13 @@ export interface StreamHandlers {
  * 서버가 `error` 이벤트를 보내거나 `completed` 없이 연결이 끝나면 ApiError를 던진다.
  */
 export async function streamMessage(
+  slug: string,
   conversationId: string,
   content: string,
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<string> {
-  const res = await fetch(`/api/conversations/${conversationId}/messages/stream`, {
+  const res = await fetch(storePath(slug, `/conversations/${conversationId}/messages/stream`), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify({ content }),
@@ -217,20 +219,24 @@ export interface OwnerReplyResult {
   conversation_message: TicketMessage;
 }
 
-export async function fetchTickets(status?: TicketStatus): Promise<Ticket[]> {
+export async function fetchTickets(slug: string, status?: TicketStatus): Promise<Ticket[]> {
   const query = status === undefined ? "" : `?status=${status}`;
-  return request<Ticket[]>(`/api/owner/tickets${query}`);
+  return request<Ticket[]>(`${storePath(slug, "/owner/tickets")}${query}`);
 }
 
-export async function fetchTicket(ticketId: string): Promise<TicketDetail> {
-  return request<TicketDetail>(`/api/owner/tickets/${ticketId}`);
+export async function fetchTicket(slug: string, ticketId: string): Promise<TicketDetail> {
+  return request<TicketDetail>(storePath(slug, `/owner/tickets/${ticketId}`));
 }
 
-export async function replyToTicket(ticketId: string, answer: string): Promise<OwnerReplyResult> {
-  return request<OwnerReplyResult>(`/api/owner/tickets/${ticketId}/reply`, {
+export async function replyToTicket(slug: string, ticketId: string, answer: string): Promise<OwnerReplyResult> {
+  return request<OwnerReplyResult>(storePath(slug, `/owner/tickets/${ticketId}/reply`), {
     method: "POST",
     body: JSON.stringify({ answer }),
   });
+}
+
+function storePath(slug: string, path: string): string {
+  return `/api/stores/${encodeURIComponent(slug)}${path}`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

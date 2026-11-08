@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useParams } from "react-router-dom";
 
 import {
   ApiError,
@@ -23,6 +23,7 @@ const REFRESH_MS = 2000;
 const DAY_NAMES = ["월", "화", "수", "목", "금", "토", "일"] as const;
 
 export default function CustomerChatPage() {
+  const { storeSlug = "" } = useParams();
   const storeState = useOutletContext<StoreState>();
   // null이면 첫 화면(손님 선택)이다. 고른 뒤에만 그 손님의 대화 목록을 불러온다.
   const [visitorId, setVisitorId] = useState<DemoVisitorId | null>(null);
@@ -42,7 +43,7 @@ export default function CustomerChatPage() {
       return;
     }
     let ignore = false;
-    fetchConversations(visitorId)
+    fetchConversations(storeSlug, visitorId)
       .then((list) => {
         if (ignore) {
           return;
@@ -58,14 +59,14 @@ export default function CustomerChatPage() {
     return () => {
       ignore = true;
     };
-  }, [visitorId]);
+  }, [storeSlug, visitorId]);
 
   useEffect(() => {
     if (visitorId === null || activeId === null || sending) {
       return;
     }
     let ignore = false;
-    fetchMessages(activeId)
+    fetchMessages(storeSlug, activeId)
       .then((history) => {
         if (ignore) {
           return;
@@ -87,7 +88,7 @@ export default function CustomerChatPage() {
     return () => {
       ignore = true;
     };
-  }, [activeId, sending, visitorId]);
+  }, [activeId, sending, storeSlug, visitorId]);
 
   // 보고 있는 대화에 사장 답변이 붙으면 새로고침 없이 보여 준다. 답변을 받는 중에는 조각을 덮어쓰지 않는다.
   useEffect(() => {
@@ -96,17 +97,17 @@ export default function CustomerChatPage() {
     }
     const id = activeId;
     const timer = setInterval(() => {
-      fetchMessages(id)
+      fetchMessages(storeSlug, id)
         .then((history) => {
           setMessages((current) => (sameMessages(current, history) ? current : history));
         })
         .catch(() => undefined);
-      fetchConversations(visitorId)
+      fetchConversations(storeSlug, visitorId)
         .then((list) => setConversations(list))
         .catch(() => undefined);
     }, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [activeId, sending, visitorId]);
+  }, [activeId, sending, storeSlug, visitorId]);
 
   // 화면을 떠나면 진행 중인 스트림을 끊는다. 서버는 연결 종료를 보고 생성을 멈춘다.
   useEffect(() => () => streamAbort.current?.abort(), []);
@@ -187,6 +188,7 @@ export default function CustomerChatPage() {
     try {
       const id = await ensureConversation();
       const savedId = await streamMessage(
+        storeSlug,
         id,
         content,
         {
@@ -198,7 +200,7 @@ export default function CustomerChatPage() {
       setMessages((current) =>
         current.map((message) => (message.id === pendingAnswerId ? { ...message, id: savedId } : message)),
       );
-      setConversations(await fetchConversations(requireVisitor()));
+      setConversations(await fetchConversations(storeSlug, requireVisitor()));
     } catch (caught: unknown) {
       if (abort.signal.aborted) {
         return;
@@ -212,7 +214,7 @@ export default function CustomerChatPage() {
         );
       } else {
         try {
-          setMessages(await fetchMessages(id));
+          setMessages(await fetchMessages(storeSlug, id));
         } catch {
           // 목록 조회까지 실패하면 받던 조각만 지우고 화면용 메시지를 그대로 둔다.
           setMessages((current) => current.filter((message) => message.id !== pendingAnswerId));
@@ -232,7 +234,7 @@ export default function CustomerChatPage() {
     if (current !== null) {
       return current;
     }
-    const created = await createConversation(visitor);
+    const created = await createConversation(storeSlug, visitor);
     rememberConversation(visitor, created.id);
     setActiveId(created.id);
     return created.id;
@@ -241,10 +243,10 @@ export default function CustomerChatPage() {
   function rememberConversation(visitor: string, id: string | null) {
     conversationId.current = id;
     if (id === null) {
-      localStorage.removeItem(conversationKey(visitor));
+      localStorage.removeItem(conversationKey(storeSlug, visitor));
       return;
     }
-    localStorage.setItem(conversationKey(visitor), id);
+    localStorage.setItem(conversationKey(storeSlug, visitor), id);
   }
 
   const store = storeState.kind === "ready" ? storeState.store : null;
@@ -271,7 +273,7 @@ export default function CustomerChatPage() {
   return (
     <div className="chat-layout">
       <aside className="chat-side" aria-label="대화 목록">
-        <h2>{visitor.name}의 대화</h2>
+        <h2>대화</h2>
         <button type="button" className="button-secondary" onClick={startNewChat} disabled={sending}>
           새 대화
         </button>
@@ -304,7 +306,6 @@ export default function CustomerChatPage() {
       </aside>
       <section className="chat" aria-label="고객 채팅">
         <div className="chat-toolbar">
-          <h1>{visitor.name}</h1>
           <button type="button" className="button-secondary" onClick={leaveVisitor} disabled={sending}>
             다른 손님
           </button>
@@ -313,7 +314,7 @@ export default function CustomerChatPage() {
           {messages.length === 0 && !sending && (
             <p className="chat-empty">
               {activeId === null
-                ? "왼쪽에서 대화를 고르거나, 메시지를 적어 새 대화를 시작하세요."
+                ? "대화를 고르거나, 메시지를 적어 새 대화를 시작하세요."
                 : "매장에 궁금한 점을 물어보세요. 답하기 어려운 문의는 매장에 전달합니다."}
             </p>
           )}
@@ -386,7 +387,7 @@ function StoreCard({ store }: { store: Store }) {
           <h3>영업시간</h3>
           <ul className="hours">
             {store.business_hours.map((hour) => (
-              <li key={hour.day_of_week}>
+              <li key={hour.day_of_week} className={hour.is_closed ? "hours-closed" : undefined}>
                 <span>{DAY_NAMES[hour.day_of_week]}</span>
                 <span>{formatHour(hour)}</span>
               </li>
@@ -398,8 +399,8 @@ function StoreCard({ store }: { store: Store }) {
   );
 }
 
-function conversationKey(visitorId: string): string {
-  return `ai-store-help.conversation.${visitorId}`;
+function conversationKey(storeSlug: string, visitorId: string): string {
+  return `ai-store-help.conversation.${storeSlug}.${visitorId}`;
 }
 
 function sameMessages(current: ChatMessage[], next: ChatMessage[]): boolean {

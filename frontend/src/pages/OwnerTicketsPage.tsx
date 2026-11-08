@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 
 import {
   ApiError,
@@ -31,6 +32,7 @@ const REASON_LABEL: Record<Ticket["escalation_reason"], string> = {
 };
 
 export default function OwnerTicketsPage() {
+  const { storeSlug = "" } = useParams();
   const [filter, setFilter] = useState<Filter>("open");
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -45,7 +47,7 @@ export default function OwnerTicketsPage() {
 
   useEffect(() => {
     let ignore = false;
-    fetchTickets(filter === "all" ? undefined : filter)
+    fetchTickets(storeSlug, filter === "all" ? undefined : filter)
       .then((list) => {
         if (ignore) {
           return;
@@ -65,14 +67,14 @@ export default function OwnerTicketsPage() {
     return () => {
       ignore = true;
     };
-  }, [filter, reloadKey]);
+  }, [filter, reloadKey, storeSlug]);
 
   useEffect(() => {
     if (selectedId === null) {
       return;
     }
     let ignore = false;
-    fetchTicket(selectedId)
+    fetchTicket(storeSlug, selectedId)
       .then((loaded) => {
         if (!ignore) {
           setDetail(loaded);
@@ -87,7 +89,7 @@ export default function OwnerTicketsPage() {
     return () => {
       ignore = true;
     };
-  }, [selectedId, reloadKey]);
+  }, [reloadKey, selectedId, storeSlug]);
 
   function selectTicket(ticketId: string) {
     setSelectedId(ticketId);
@@ -105,7 +107,7 @@ export default function OwnerTicketsPage() {
     setReplyError(null);
     setNotice(null);
     try {
-      const result = await replyToTicket(selectedId, answer);
+      const result = await replyToTicket(storeSlug, selectedId, answer);
       setDraft("");
       setNotice(
         result.superseded_knowledge_id === null

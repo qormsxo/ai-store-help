@@ -24,56 +24,79 @@
 
 body {
   margin: 0;
-  background:
-    radial-gradient(900px 420px at 10% -10%, #1a2744 0%, transparent 60%),
-    var(--background, #0e1116);
+  background: #0e1116;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .app-header {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px 24px;
-  padding: 14px 24px;
-  background: #12171f;
+  gap: 8px 20px;
+  min-height: 56px;
+  padding: 8px 20px;
+  background: #12161c;
   border-bottom: 1px solid var(--line);
 }
 
 .app-title {
-  font-size: 18px;
-  letter-spacing: -0.01em;
+  flex: 0 0 auto;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
 .app-nav {
   display: flex;
-  gap: 8px;
-  flex: 1;
+  gap: 4px;
 }
 
 .app-nav a {
   color: var(--muted);
   text-decoration: none;
-  padding: 6px 10px;
-  border-radius: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 14px;
   white-space: nowrap;
 }
 
-@media (max-width: 700px) {
-  .app-nav {
-    flex: 1 1 100%;
-    order: 3;
-  }
-}
-
 .app-nav a.active {
-  color: #e7edf5;
+  color: #f4f7ff;
   font-weight: 600;
-  background: #243049;
+  background: #243044;
 }
 
 .status {
+  margin-left: auto;
   font-size: 13px;
   color: var(--muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .app-title {
+    margin-right: auto;
+  }
+
+  .status {
+    margin-left: 0;
+  }
+
+  .app-nav {
+    flex: 1 1 100%;
+    order: 3;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .app-nav a {
+    text-align: center;
+  }
 }
 
 .status::before {
@@ -103,20 +126,29 @@ body {
 }
 
 .app-main {
-  max-width: 1080px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+  max-width: 1120px;
   margin: 0 auto;
-  padding: 20px 24px 32px;
+  padding: 20px;
 }
 
 .chat-layout {
   display: grid;
   gap: 16px;
+  flex: 1;
+  align-items: start;
+  min-width: 0;
 }
 
 .chat {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 132px);
+  min-width: 0;
+  height: min(70vh, 640px);
   min-height: 420px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -126,7 +158,7 @@ body {
 .chat-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
 }
@@ -155,10 +187,10 @@ body {
 }
 
 .bubble {
-  max-width: 80%;
-  padding: 10px 12px;
+  max-width: min(78%, 520px);
+  padding: 10px 14px;
   border-radius: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .bubble p {
@@ -175,7 +207,7 @@ body {
 
 .bubble-user {
   align-self: flex-end;
-  background: #3451d1;
+  background: #2c4ec4;
   color: #f4f7ff;
 }
 
@@ -207,12 +239,15 @@ body {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+  min-width: 0;
   padding: 12px 16px 16px;
 }
 
 .chat-form textarea,
 .owner-form textarea {
   flex: 1;
+  width: 100%;
+  min-width: 0;
   resize: vertical;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -233,14 +268,14 @@ button {
   padding: 10px 16px;
   border: 0;
   border-radius: 10px;
-  background: #3451d1;
+  background: #2c4ec4;
   color: #f4f7ff;
   font: inherit;
   cursor: pointer;
 }
 
 button:hover:not(:disabled) {
-  background: #4462e4;
+  background: #3a5ed4;
 }
 
 button:disabled {
@@ -260,6 +295,7 @@ button:disabled {
 }
 
 .store-card {
+  min-width: 0;
   padding: 16px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -309,7 +345,16 @@ button:disabled {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 2px 0;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+
+.hours li:first-child {
+  border-top: 0;
+}
+
+.hours-closed {
+  color: var(--faint);
 }
 
 .visually-hidden {
@@ -323,16 +368,35 @@ button:disabled {
   border: 0;
 }
 
-@media (min-width: 800px) {
+@media (min-width: 860px) {
   .chat-layout {
-    grid-template-columns: 240px 1fr 240px;
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .store-card {
+    grid-column: 1 / -1;
+  }
+
+  .chat {
+    height: calc(100vh - 112px);
+    min-height: 520px;
+  }
+}
+
+@media (min-width: 1180px) {
+  .chat-layout {
+    grid-template-columns: 260px minmax(0, 1fr) 280px;
     align-items: start;
+  }
+
+  .store-card {
+    grid-column: auto;
   }
 }
 
 .visitor-picker {
-  max-width: 420px;
-  margin: 48px auto;
+  width: min(420px, 100%);
+  margin: auto;
   padding: 28px 24px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -350,11 +414,15 @@ button:disabled {
 }
 
 .visitor-picker .visitor-button {
+  display: flex;
+  justify-content: flex-start;
   padding: 14px 16px;
   font-size: 16px;
+  text-align: left;
 }
 
 .chat-side {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -368,8 +436,10 @@ button:disabled {
 }
 
 .chat-side .button-secondary {
-  width: 100%;
-  margin-bottom: 12px;
+  width: auto;
+  margin: 0 0 12px;
+  padding: 6px 10px;
+  background: transparent;
 }
 
 .visitor-switch,
@@ -409,6 +479,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .conversation-preview {
@@ -419,6 +491,11 @@ button:disabled {
   white-space: nowrap;
 }
 
+.conversation-item time {
+  color: var(--faint);
+  font-size: 12px;
+}
+
 .owner {
   display: grid;
   gap: 16px;
@@ -427,6 +504,7 @@ button:disabled {
 
 .owner-list,
 .owner-detail {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -465,14 +543,19 @@ button:disabled {
 
 .owner-filters {
   display: flex;
-  gap: 8px;
+  gap: 4px;
+  width: fit-content;
   margin-bottom: 12px;
+  padding: 4px;
+  background: #10141b;
+  border: 1px solid var(--line);
+  border-radius: 12px;
 }
 
 .owner-filter {
-  background: var(--surface-2);
+  background: transparent;
   color: var(--muted);
-  border: 1px solid var(--line);
+  border: 0;
   padding: 6px 12px;
 }
 
@@ -481,9 +564,8 @@ button:disabled {
 }
 
 .owner-filter-active {
-  background: #3451d1;
+  background: #2c4ec4;
   color: #f4f7ff;
-  border-color: #3451d1;
 }
 
 .ticket-list {
@@ -501,6 +583,8 @@ button:disabled {
   align-items: flex-start;
   gap: 4px;
   width: 100%;
+  max-width: 100%;
+  overflow: hidden;
   padding: 10px 12px;
   background: var(--surface-2);
   color: #e7edf5;

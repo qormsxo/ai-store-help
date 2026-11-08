@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
     database_url: str = "postgresql+asyncpg://app:app@localhost:5432/app"
-    # 이 실행 환경이 응대하는 매장. 요청이나 LLM이 아니라 서버 설정으로만 정해진다.
+    # 주소에 slug가 없을 때 여는 매장. /stores/{slug} 경로는 이 값 대신 그 slug를 쓴다.
     default_store_slug: str = "oak-pine-demo"
 
     # mock이면 Gemini를 호출하지 않고 정해진 문장을 스트리밍한다. 실제 모델은 gemini.

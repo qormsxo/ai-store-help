@@ -1,25 +1,26 @@
 import re
 import uuid
 
-from sqlalchemy import Float, SQLColumnExpression, String, func, literal, literal_column, select
+from sqlalchemy import SQLColumnExpression, String, case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import KnowledgeEntry
 
-# PostgreSQL 기본 설정에는 한글 형태소 사전이 없다. 영어 사전은 한글을 검색어에서 빼므로 simple을 쓴다.
-# simple은 띄어 쓴 단어를 그대로 둔다. 강아지와 강아지는 같은 단어로 보지 않는다.
-_TEXT_SEARCH = literal_column("'simple'::regconfig")
 _WORD = re.compile(r"[0-9A-Za-z가-힣]+")
+# 질문에 있으면 답에만 있는 경우보다 위로 올린다.
+_QUESTION_WEIGHT = 2
+_ANSWER_WEIGHT = 1
 
 
-def _any_keyword_query(query: str) -> str:
-    """모델이 준 검색어를 '하나라도 맞으면 찾는' 웹 검색문으로 바꾼다.
+def _keywords(query: str) -> list[str]:
+    """붙임표와 공백으로 단어를 나눈다. dog-friendly는 dog와 friendly가 된다."""
+    return [word for word in _WORD.findall(query) if word.casefold() != "or"]
 
-    websearch_to_tsquery는 띄어쓴 단어를 모두 포함한 문서만 찾는다. dog-friendly는 한 덩어리로
-    남아 저장된 dog와도 어긋난다. 붙임표와 공백으로 나누고 or로 잇는다.
-    """
-    words = [word for word in _WORD.findall(query) if word.casefold() != "or"]
-    return " or ".join(words)
+
+def _contains_pattern(word: str) -> str:
+    """LIKE 와일드카드 문자를 글자 그대로 두고, 앞뒤를 포함 검색으로 만든다."""
+    escaped = word.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+    return f"%{escaped}%"
 
 
 def _normalized(question: SQLColumnExpression[str]) -> SQLColumnExpression[str]:
@@ -45,31 +46,33 @@ async def search_active_entries(
 ) -> list[tuple[KnowledgeEntry, float]]:
     """해당 매장의 활성 지식을 질문과 답변 전체에서 검색해 관련성 높은 순서로 반환한다.
 
-    검색어의 단어가 모두 들어 있을 필요는 없다. 하나라도 맞으면 후보가 되고, 많이 맞을수록 위로 온다.
-    질문(A)을 답변(B)보다 높게 가중한다. 사장이 정리한 질문과 맞는 항목이 답변 본문에 단어만
-    우연히 들어 있는 항목보다 위로 오게 하기 위해서다.
+    검색어의 단어가 모두 들어 있을 필요는 없다. 하나라도 앞뒤로 포함되면 후보가 되고, 많이 맞을수록 위로 온다.
+    질문에 들어 있으면 답변에만 들어 있는 경우보다 높게 점수한다. 반려견은 반려견과에도 맞는다.
     """
-    keywords = _any_keyword_query(query)
-    if not keywords:
+    words = _keywords(query)
+    if not words:
         return []
-    # setweight의 가중치는 PostgreSQL "char" 타입이라 바인드 파라미터(VARCHAR) 대신 상수 리터럴로 쓴다.
-    document = func.setweight(func.to_tsvector(_TEXT_SEARCH, KnowledgeEntry.question), literal_column("'A'")).op(
-        "||"
-    )(func.setweight(func.to_tsvector(_TEXT_SEARCH, KnowledgeEntry.answer), literal_column("'B'")))
-    tsquery = func.websearch_to_tsquery(_TEXT_SEARCH, keywords)
-    rank = func.ts_rank_cd(document, tsquery, type_=Float)
+    # 단어마다 질문 2점, 답변 1점. 둘 다 맞으면 더해진다.
+    score: SQLColumnExpression[int] = literal(0)
+    hits: list[SQLColumnExpression[bool]] = []
+    for word in words:
+        pattern = _contains_pattern(word)
+        in_question = KnowledgeEntry.question.ilike(pattern, escape="\\")
+        in_answer = KnowledgeEntry.answer.ilike(pattern, escape="\\")
+        hits.append(in_question | in_answer)
+        score = score + case((in_question, _QUESTION_WEIGHT), else_=0) + case((in_answer, _ANSWER_WEIGHT), else_=0)
 
     statement = (
-        select(KnowledgeEntry, rank)
+        select(KnowledgeEntry, score)
         .where(
             KnowledgeEntry.store_id == store_id,
             KnowledgeEntry.is_active.is_(True),
-            document.op("@@")(tsquery),
+            or_(*hits),
         )
         # 점수가 같으면 최근에 갱신된 지식을 먼저 둔다. id는 순서를 고정하기 위한 마지막 기준이다.
-        .order_by(rank.desc(), KnowledgeEntry.updated_at.desc(), KnowledgeEntry.id)
+        .order_by(score.desc(), KnowledgeEntry.updated_at.desc(), KnowledgeEntry.id)
         .limit(limit)
     )
     result = await session.execute(statement)
-    # type_=Float는 점수를 Decimal | float로 추론한다. 이 함수가 돌려주는 점수는 float다.
+    # 점수는 질문 2점, 답변 1점을 더한 정수다. 호출부가 소수로 비교하므로 float로 맞춘다.
     return [(entry, float(score)) for entry, score in result.all()]

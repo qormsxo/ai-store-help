@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.service import AgentService
@@ -12,8 +12,11 @@ from app.services import store_service
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
-async def get_current_store(session: SessionDep) -> Store:
-    return await store_service.get_default_store(session)
+async def get_current_store(request: Request, session: SessionDep) -> Store:
+    # 경로 값은 문자열이다. 키가 없으면 기본 매장이다.
+    raw = request.path_params.get("slug")
+    slug = None if raw is None else str(raw)
+    return await store_service.get_store_for_request(session, slug)
 
 
 def get_agent_service() -> AgentService:
@@ -23,5 +26,6 @@ def get_agent_service() -> AgentService:
 
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
 
-# 라우터는 이 의존성으로만 매장을 얻는다. 요청 본문이나 쿼리로 store_id를 받지 않는다.
+# 라우터는 이 의존성으로만 매장을 얻는다. 본문이나 쿼리의 store_id는 무시한다.
+# 경로가 /stores/{slug}이면 그 매장이고, 아니면 DEFAULT_STORE_SLUG다.
 CurrentStoreDep = Annotated[Store, Depends(get_current_store)]

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import { fetchHealth, fetchStore, type Store } from "../api/client";
 
@@ -13,6 +13,7 @@ const STATUS_LABEL: Record<BackendStatus, string> = {
 };
 
 export default function Layout() {
+  const { storeSlug } = useParams();
   const [status, setStatus] = useState<BackendStatus>("checking");
   const [storeState, setStoreState] = useState<StoreState>({ kind: "loading" });
 
@@ -20,10 +21,29 @@ export default function Layout() {
     fetchHealth()
       .then(() => setStatus("ok"))
       .catch(() => setStatus("down"));
-    fetchStore()
-      .then((store) => setStoreState({ kind: "ready", store }))
-      .catch(() => setStoreState({ kind: "missing" }));
   }, []);
+
+  useEffect(() => {
+    if (storeSlug === undefined) {
+      return;
+    }
+    let ignore = false;
+    setStoreState({ kind: "loading" });
+    fetchStore(storeSlug)
+      .then((store) => {
+        if (!ignore) {
+          setStoreState({ kind: "ready", store });
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setStoreState({ kind: "missing" });
+        }
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [storeSlug]);
 
   const title = storeState.kind === "ready" ? storeState.store.name : "AI Store Help";
 
@@ -32,8 +52,8 @@ export default function Layout() {
       <header className="app-header">
         <strong className="app-title">{title}</strong>
         <nav className="app-nav">
-          <NavLink to="/chat">고객 채팅</NavLink>
-          <NavLink to="/owner">사장 문의 관리</NavLink>
+          <NavLink to={`/${storeSlug}/chat`}>고객 채팅</NavLink>
+          <NavLink to={`/${storeSlug}/owner`}>사장 문의 관리</NavLink>
         </nav>
         <span className={`status status-${status}`}>{STATUS_LABEL[status]}</span>
       </header>

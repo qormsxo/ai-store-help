@@ -2,8 +2,8 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
-from app.errors import StoreNotConfiguredError
+from app.config import SLUG_PATTERN, get_settings
+from app.errors import NotFoundError, StoreNotConfiguredError
 from app.models import Store
 from app.repositories import store_repository
 
@@ -21,5 +21,17 @@ async def get_store_by_slug(session: AsyncSession, slug: str) -> Store:
 
 
 async def get_default_store(session: AsyncSession) -> Store:
-    """이 실행 환경이 응대하는 매장(DEFAULT_STORE_SLUG)을 조회한다."""
+    """주소에 매장이 없을 때 쓰는 매장(DEFAULT_STORE_SLUG)을 조회한다."""
     return await get_store_by_slug(session, get_settings().default_store_slug)
+
+
+async def get_store_for_request(session: AsyncSession, slug: str | None) -> Store:
+    """경로에 slug가 있으면 그 매장, 없으면 기본 매장. 없는 slug는 404다."""
+    if slug is None:
+        return await get_default_store(session)
+    if SLUG_PATTERN.fullmatch(slug) is None:
+        raise NotFoundError("매장을 찾을 수 없습니다.")
+    store = await store_repository.find_store_by_slug(session, slug)
+    if store is None:
+        raise NotFoundError("매장을 찾을 수 없습니다.")
+    return store

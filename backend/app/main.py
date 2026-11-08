@@ -2,7 +2,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 
 from app.api import conversations, health, owner, store
 from app.config import get_settings
@@ -29,7 +29,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="AI Store Help", lifespan=lifespan)
 register_exception_handlers(app)
+# 같은 라우터를 두 접두사에 붙인다. slug가 없는 경로는 기본 매장, /stores/{slug}는 그 매장이다.
+scoped = APIRouter(prefix="/stores/{slug}")
+scoped.include_router(store.router)
+scoped.include_router(conversations.router)
+scoped.include_router(owner.router)
 app.include_router(health.router, prefix="/api")
 app.include_router(store.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(owner.router, prefix="/api")
+app.include_router(scoped, prefix="/api")
