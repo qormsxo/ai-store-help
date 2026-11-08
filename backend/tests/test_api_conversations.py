@@ -1,11 +1,10 @@
-"""고객 채팅 REST API 테스트.
+"""고객 채팅 API 테스트.
 
 실제 FastAPI 라우터, ChatService, AgentService, ToolDispatcher, PostgreSQL을 쓰고 LLM만 가짜로 바꾼다.
-- MockGeminiProvider: 미리 정한 ModelTurn/예외를 돌려주는 가짜 Provider
-- 진짜 GeminiProvider + 가짜 SDK 호출(FakeGenerateContent): google-genai 요청/응답 형식과 오류 매핑까지 확인
-실제 Gemini API는 호출하지 않는다.
+답변은 SSE 스트림으로만 받는다. 스트림이 시작되기 전의 실패(404, 409, 422, 저장 실패)는 JSON 오류다.
 """
 
+import json
 import uuid
 
 import httpx
@@ -32,9 +31,9 @@ from app.schemas import MAX_MESSAGE_LENGTH
 from app.services.conversation_service import HISTORY_LIMIT
 from tests.factories import create_conversation, create_message, create_store
 from tests.fake_gemini import (
-    FakeGenerateContent,
     Stall,
     api_error,
+    as_single_chunk_streams,
     function_call_response,
     provider_with,
     text_response,
@@ -66,7 +65,23 @@ async def start_conversation(client: httpx.AsyncClient, visitor_id: str = "visit
 
 
 async def send(client: httpx.AsyncClient, conversation_id: str, content: str) -> httpx.Response:
-    return await client.post(f"/api/conversations/{conversation_id}/messages", json={"content": content})
+    return await client.post(f"/api/conversations/{conversation_id}/messages/stream", json={"content": content})
+
+
+def assert_completed(res: httpx.Response) -> None:
+    assert res.status_code == 200
+    assert "event: completed\n" in res.text
+    assert "event: error\n" not in res.text
+
+
+def stream_error(res: httpx.Response) -> dict[str, str]:
+    """스트림이 시작된 뒤의 실패. HTTP는 200이고 마지막 이벤트는 error다."""
+    assert res.status_code == 200
+    blocks = [block for block in res.text.split("\n\n") if block.startswith("event: error\n")]
+    assert len(blocks) == 1
+    data = json.loads(blocks[0].split("data: ", 1)[1])
+    assert set(data) == {"code", "message"}
+    return data
 
 
 async def stored_messages(session: AsyncSession, conversation_id: str) -> list[Message]:
@@ -280,13 +295,13 @@ async def test_message_at_max_length_is_accepted(client: httpx.AsyncClient, stor
 
     res = await send(client, conversation_id, "a" * MAX_MESSAGE_LENGTH)
 
-    assert res.status_code == 201
+    assert_completed(res)
 
 
 async def test_missing_content_field_is_rejected(client: httpx.AsyncClient, store: Store) -> None:
     conversation_id = await start_conversation(client)
 
-    res = await client.post(f"/api/conversations/{conversation_id}/messages", json={})
+    res = await client.post(f"/api/conversations/{conversation_id}/messages/stream", json={})
 
     assert res.status_code == 422
 
@@ -302,22 +317,15 @@ async def test_send_message_saves_user_message_and_assistant_reply(
 
     res = await send(client, conversation_id, "  What is your store address?  ")
 
-    assert res.status_code == 201
-    body = res.json()
-    # 앞뒤 공백은 정리해서 저장한다.
-    assert (body["user_message"]["role"], body["user_message"]["content"]) == ("user", "What is your store address?")
-    assert (body["assistant_message"]["role"], body["assistant_message"]["content"]) == (
-        "assistant",
-        "We are at 1427 Oak Street.",
-    )
+    assert_completed(res)
     saved = await stored_messages(session, conversation_id)
-    assert [(str(m.id), m.role, m.content) for m in saved] == [
-        (body["user_message"]["id"], MessageRole.USER, "What is your store address?"),
-        (body["assistant_message"]["id"], MessageRole.ASSISTANT, "We are at 1427 Oak Street."),
+    # 앞뒤 공백은 정리해서 저장한다.
+    assert [(m.role, m.content) for m in saved] == [
+        (MessageRole.USER, "What is your store address?"),
+        (MessageRole.ASSISTANT, "We are at 1427 Oak Street."),
     ]
-    # 고객 화면에는 같은 내용이 메시지 목록으로도 보인다.
     listed = await client.get(f"/api/conversations/{conversation_id}/messages")
-    assert [m["id"] for m in listed.json()] == [body["user_message"]["id"], body["assistant_message"]["id"]]
+    assert [m["id"] for m in listed.json()] == [str(m.id) for m in saved]
 
 
 # --- 7, 8. 대화 문맥 -----------------------------------------------------------------------------
@@ -398,8 +406,9 @@ async def test_multi_tool_request_creates_ticket_for_this_message(
 
     res = await send(client, conversation_id, REFUND_QUESTION)
 
-    assert res.status_code == 201
-    assert res.json()["assistant_message"]["content"] == "I've forwarded your question to our staff."
+    assert_completed(res)
+    saved = await stored_messages(session, conversation_id)
+    assert saved[-1].content == "I've forwarded your question to our staff."
     assert turn_kinds(provider.requests[3].turns) == [
         "user",
         "model:get_store_profile",
@@ -413,7 +422,7 @@ async def test_multi_tool_request_creates_ticket_for_this_message(
     assert ticket is not None
     assert (str(ticket.conversation_id), str(ticket.source_message_id), ticket.store_id) == (
         conversation_id,
-        res.json()["user_message"]["id"],
+        str(saved[0].id),
         store.id,
     )
     # 대화 메시지에는 일반 대화(고객 질문, 최종 답변)만 저장된다. Tool 호출과 Observation은 저장하지 않는다.
@@ -428,7 +437,7 @@ async def test_real_gemini_provider_chain_links_function_calls_and_responses(
 ) -> None:
     """GeminiProvider(진짜) → AgentService → API. SDK 호출만 가짜라서 Gemini 형식 그대로 검증한다."""
     conversation_id = await start_conversation(client)
-    fake = FakeGenerateContent(
+    fake = as_single_chunk_streams(
         [
             function_call_response("get_store_profile", "call-1"),
             function_call_response("search_knowledge", "call-2", query="refund 60 days"),
@@ -440,8 +449,9 @@ async def test_real_gemini_provider_chain_links_function_calls_and_responses(
 
     res = await send(client, conversation_id, REFUND_QUESTION)
 
-    assert res.status_code == 201
-    assert res.json()["assistant_message"]["content"] == "I've forwarded your question to our staff."
+    assert_completed(res)
+    saved = await stored_messages(session, conversation_id)
+    assert saved[-1].content == "I've forwarded your question to our staff."
     assert len(fake.calls) == 4
     assert [c.role for c in fake.calls[0].contents] == ["user"]
     assert fake.calls[0].contents[0].parts == [types.Part(text=REFUND_QUESTION)]
@@ -477,13 +487,13 @@ async def test_real_gemini_provider_chain_links_function_calls_and_responses(
 
 
 @pytest.mark.parametrize(
-    ("outcomes", "timeout_seconds", "status_code", "code"),
+    ("outcomes", "timeout_seconds", "code"),
     [
-        ([api_error(429, "RESOURCE_EXHAUSTED", "Quota exceeded for project 123")] * 3, 5, 429, "LLM_RATE_LIMITED"),
-        ([api_error(503, "UNAVAILABLE", "backend 10.0.0.1 overloaded")] * 3, 5, 503, "LLM_UNAVAILABLE"),
-        ([api_error(400, "INVALID_ARGUMENT", "API key not valid: AIzaSyFAKE")], 5, 503, "LLM_NOT_CONFIGURED"),
-        ([api_error(400, "INVALID_ARGUMENT", "bad request details")], 5, 502, "LLM_REQUEST_FAILED"),
-        ([Stall(seconds=5)], 0.05, 504, "LLM_TIMEOUT"),
+        ([api_error(429, "RESOURCE_EXHAUSTED", "Quota exceeded for project 123")] * 3, 5, "LLM_RATE_LIMITED"),
+        ([api_error(503, "UNAVAILABLE", "backend 10.0.0.1 overloaded")] * 3, 5, "LLM_UNAVAILABLE"),
+        ([api_error(400, "INVALID_ARGUMENT", "API key not valid: AIzaSyFAKE")], 5, "LLM_NOT_CONFIGURED"),
+        ([api_error(400, "INVALID_ARGUMENT", "bad request details")], 5, "LLM_REQUEST_FAILED"),
+        ([Stall(seconds=5)], 0.05, "LLM_TIMEOUT"),
     ],
 )
 async def test_gemini_errors_become_safe_error_responses_and_keep_user_message(
@@ -492,16 +502,14 @@ async def test_gemini_errors_become_safe_error_responses_and_keep_user_message(
     store: Store,
     outcomes: list[types.GenerateContentResponse | Exception | Stall],
     timeout_seconds: float,
-    status_code: int,
     code: str,
 ) -> None:
     conversation_id = await start_conversation(client)
-    use_agent(provider_with(FakeGenerateContent(list(outcomes)), timeout_seconds=timeout_seconds))
+    use_agent(provider_with(as_single_chunk_streams(list(outcomes)), timeout_seconds=timeout_seconds))
 
     res = await send(client, conversation_id, "Do you allow dogs inside?")
 
-    assert res.status_code == status_code
-    assert error_of(res)["code"] == code
+    assert stream_error(res)["code"] == code
     # 구글이 준 오류 문구, 키, IP 같은 내부 정보는 고객 응답에 없다.
     for leaked in ("AIzaSy", "10.0.0.1", "project 123", "RESOURCE_EXHAUSTED", "bad request details"):
         assert leaked not in res.text
@@ -534,8 +542,7 @@ async def test_non_inquiry_returns_422_and_does_not_save_an_answer(
 
     res = await send(client, conversation_id, "How is the weather?")
 
-    assert res.status_code == 422
-    assert error_of(res) == {"code": "NOT_STORE_INQUIRY", "message": "매장에 대한 문의만 답변할 수 있습니다."}
+    assert stream_error(res) == {"code": "NOT_STORE_INQUIRY", "message": "매장에 대한 문의만 답변할 수 있습니다."}
     assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
         (MessageRole.USER, "How is the weather?")
     ]
@@ -546,11 +553,11 @@ async def test_non_inquiry_returns_422_and_does_not_save_an_answer(
 
 
 @pytest.mark.parametrize(
-    ("failure", "status_code", "code"),
+    ("failure", "code"),
     [
-        (LLMTimeoutError("timeout"), 504, "LLM_TIMEOUT"),
-        (AgentLimitExceededError("too many calls"), 502, "AGENT_LIMIT_EXCEEDED"),
-        (AgentEmptyResponseError("empty"), 502, "AGENT_EMPTY_RESPONSE"),
+        (LLMTimeoutError("timeout"), "LLM_TIMEOUT"),
+        (AgentLimitExceededError("too many calls"), "AGENT_LIMIT_EXCEEDED"),
+        (AgentEmptyResponseError("empty"), "AGENT_EMPTY_RESPONSE"),
     ],
 )
 async def test_agent_failure_keeps_user_message_and_rolls_back_ticket(
@@ -558,7 +565,6 @@ async def test_agent_failure_keeps_user_message_and_rolls_back_ticket(
     session: AsyncSession,
     store: Store,
     failure: Exception,
-    status_code: int,
     code: str,
 ) -> None:
     conversation_id = await start_conversation(client)
@@ -567,8 +573,7 @@ async def test_agent_failure_keeps_user_message_and_rolls_back_ticket(
 
     res = await send(client, conversation_id, REFUND_QUESTION)
 
-    assert res.status_code == status_code
-    assert error_of(res)["code"] == code
+    assert stream_error(res)["code"] == code
     assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
         (MessageRole.USER, REFUND_QUESTION)
     ]
@@ -586,8 +591,7 @@ async def test_reply_save_failure_keeps_user_message_and_rolls_back_ticket(
 
     res = await send(client, conversation_id, REFUND_QUESTION)
 
-    assert res.status_code == 503
-    assert error_of(res) == {
+    assert stream_error(res) == {
         "code": "MESSAGE_SAVE_FAILED",
         "message": "메시지를 저장하지 못했습니다. 같은 메시지를 다시 보내 주세요.",
     }
@@ -631,10 +635,10 @@ async def test_retry_after_failure_reuses_saved_message_and_creates_one_ticket(
     kept = await stored_messages(session, conversation_id)
     retried = await send(client, conversation_id, REFUND_QUESTION)
 
-    assert failed.status_code == 504
-    assert retried.status_code == 201
+    assert stream_error(failed)["code"] == "LLM_TIMEOUT"
+    assert_completed(retried)
     # 재시도는 처음 저장된 고객 메시지를 그대로 쓴다. 메시지가 두 번 저장되지 않는다.
-    assert retried.json()["user_message"]["id"] == str(kept[0].id)
+    assert (await stored_messages(session, conversation_id))[0].id == kept[0].id
     saved = await stored_messages(session, conversation_id)
     assert [(m.role, m.content) for m in saved] == [
         (MessageRole.USER, REFUND_QUESTION),
@@ -652,10 +656,11 @@ async def test_same_text_after_an_answer_is_a_new_message(client: httpx.AsyncCli
     conversation_id = await start_conversation(client)
     use_agent(MockGeminiProvider([final_text("Yes."), final_text("Still yes.")]))
 
-    first = await send(client, conversation_id, "Do you have oat milk?")
-    second = await send(client, conversation_id, "Do you have oat milk?")
+    await send(client, conversation_id, "Do you have oat milk?")
+    await send(client, conversation_id, "Do you have oat milk?")
 
-    assert first.json()["user_message"]["id"] != second.json()["user_message"]["id"]
+    saved = await stored_messages(session, conversation_id)
+    assert saved[0].id != saved[2].id
     assert [m.role for m in await stored_messages(session, conversation_id)] == [
         MessageRole.USER,
         MessageRole.ASSISTANT,
@@ -674,7 +679,7 @@ async def test_different_text_after_failure_is_saved_as_a_new_message(
     await send(client, conversation_id, "What time do you open?")
     res = await send(client, conversation_id, "Sorry, I mean on Sundays?")
 
-    assert res.status_code == 201
+    assert_completed(res)
     assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
         (MessageRole.USER, "What time do you open?"),
         (MessageRole.USER, "Sorry, I mean on Sundays?"),

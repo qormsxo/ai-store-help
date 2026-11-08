@@ -1,7 +1,6 @@
 """진짜 GeminiProvider를 네트워크 없이 돌리기 위한 가짜 SDK 호출.
 
-GeminiProvider가 `client.aio.models.generate_content` 대신 FakeGenerateContent를,
-`generate_content_stream` 대신 FakeGenerateContentStream을 부른다.
+GeminiProvider가 `generate_content_stream` 대신 FakeGenerateContentStream을 부른다.
 요청(Content)과 응답(GenerateContentResponse), 오류(APIError)는 모두 진짜 google-genai 타입이다.
 """
 
@@ -26,26 +25,6 @@ class RecordedCall:
     model: str
     contents: list[types.Content]
     config: types.GenerateContentConfig
-
-
-@dataclass
-class FakeGenerateContent:
-    outcomes: list[types.GenerateContentResponse | Exception | Stall]
-    calls: list[RecordedCall] = field(default_factory=list)
-
-    async def __call__(
-        self, *, model: str, contents: list[types.Content], config: types.GenerateContentConfig
-    ) -> types.GenerateContentResponse:
-        # 호출 시점의 복사본을 남긴다. Provider가 이후에 리스트를 바꿔도 기록은 변하지 않는다.
-        self.calls.append(RecordedCall(model, list(contents), config))
-        match self.outcomes.pop(0):
-            case Stall(seconds=seconds):
-                await asyncio.sleep(seconds)
-                raise AssertionError("timeout이 먼저 나야 한다")
-            case Exception() as error:
-                raise error
-            case types.GenerateContentResponse() as response:
-                return response
 
 
 type StreamStep = types.GenerateContentResponse | Exception | Stall
@@ -89,21 +68,33 @@ class FakeGenerateContentStream:
 
 
 def provider_with(
-    fake: FakeGenerateContent,
-    stream: FakeGenerateContentStream | None = None,
+    stream: FakeGenerateContentStream,
     *,
     timeout_seconds: float = 5,
     max_attempts: int = 3,
 ) -> GeminiProvider:
     return GeminiProvider(
-        fake,
-        generate_content_stream=stream or FakeGenerateContentStream([]),
+        stream,
         model="gemini-test-model",
         max_output_tokens=1024,
         timeout_seconds=timeout_seconds,
         max_attempts=max_attempts,
         retry_base_delay=0,
     )
+
+
+def as_single_chunk_streams(
+    outcomes: list[types.GenerateContentResponse | Exception | Stall],
+) -> FakeGenerateContentStream:
+    """응답·오류·대기를 호출 한 번당 청크 하나인 스트림으로 바꾼다."""
+    streams: list[list[StreamStep] | Exception] = []
+    for outcome in outcomes:
+        match outcome:
+            case Stall() | types.GenerateContentResponse() as step:
+                streams.append([step])
+            case Exception() as error:
+                streams.append(error)
+    return FakeGenerateContentStream(streams)
 
 
 def response_with(

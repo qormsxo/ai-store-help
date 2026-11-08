@@ -23,8 +23,7 @@ def create_gemini_provider(settings: Settings) -> GeminiProvider:
         http_options=HttpOptions(timeout=int(settings.gemini_timeout * 1000)),
     )
     return GeminiProvider(
-        client.aio.models.generate_content,
-        generate_content_stream=client.aio.models.generate_content_stream,
+        client.aio.models.generate_content_stream,
         model=model,
         max_output_tokens=settings.gemini_max_output_tokens,
         timeout_seconds=settings.gemini_timeout,

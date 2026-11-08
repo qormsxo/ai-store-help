@@ -14,12 +14,6 @@ _CHUNK_DELAY_SECONDS = 0.15
 
 
 class DevMockProvider:
-    async def generate(
-        self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
-    ) -> ModelTurn:
-        del system_instruction, tools
-        return ModelTurn(text="".join(_parts(turns)))
-
     async def generate_stream(
         self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
     ) -> AsyncGenerator[StreamItem]:

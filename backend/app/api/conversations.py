@@ -13,7 +13,6 @@ from app.schemas import (
     ConversationSummaryResponse,
     MessageCreate,
     MessageResponse,
-    SendMessageResponse,
 )
 from app.services import chat_service, conversation_service
 
@@ -64,21 +63,6 @@ async def list_messages(
     conversation = await conversation_service.get_conversation(session, store.id, conversation_id)
     messages = await conversation_service.list_messages(session, conversation)
     return [MessageResponse.model_validate(message) for message in messages]
-
-
-@router.post("/conversations/{conversation_id}/messages", response_model=SendMessageResponse, status_code=201)
-async def send_message(
-    conversation_id: uuid.UUID,
-    body: MessageCreate,
-    store: CurrentStoreDep,
-    session: SessionDep,
-    agent: AgentServiceDep,
-) -> SendMessageResponse:
-    result = await chat_service.send_message(session, agent, store.id, conversation_id, body.content)
-    return SendMessageResponse(
-        user_message=MessageResponse.model_validate(result.user_message),
-        assistant_message=MessageResponse.model_validate(result.assistant_message),
-    )
 
 
 @router.post("/conversations/{conversation_id}/messages/stream", response_class=StreamingResponse)

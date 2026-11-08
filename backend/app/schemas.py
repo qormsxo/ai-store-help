@@ -80,11 +80,6 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
 
-class SendMessageResponse(BaseModel):
-    user_message: MessageResponse
-    assistant_message: MessageResponse
-
-
 class MessageDeltaEvent(BaseModel):
     """SSE message_delta: AI가 방금 생성한 텍스트 조각. 이어 붙이면 답변이 된다."""
 

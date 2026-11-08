@@ -44,9 +44,9 @@ class Chunks:
 
 @dataclass
 class MockGeminiProvider:
-    """responses를 요청마다 하나씩 소비한다. generate와 generate_stream이 같은 목록을 쓴다.
+    """responses를 요청마다 하나씩 소비한다.
 
-    generate_stream에서 ModelTurn은 텍스트를 조각 하나로 내보내고, 여러 조각이 필요하면 Chunks를 쓴다.
+    ModelTurn은 텍스트를 조각 하나로 내보내고, 여러 조각이 필요하면 Chunks를 쓴다.
     """
 
     responses: list[ModelTurn | Exception | Chunks]
@@ -54,17 +54,6 @@ class MockGeminiProvider:
     closed: bool = False
     # 스트림이 끝까지 가지 못하고 닫히거나 취소된 횟수(연결 종료 테스트용)
     interrupted_streams: int = 0
-
-    async def generate(
-        self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
-    ) -> ModelTurn:
-        match self._next(system_instruction, turns, tools):
-            case Exception() as error:
-                raise error
-            case ModelTurn() as turn:
-                return turn
-            case Chunks():
-                raise AssertionError("Chunks는 generate_stream에서만 쓸 수 있습니다.")
 
     async def generate_stream(
         self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]

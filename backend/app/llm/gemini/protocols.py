@@ -6,14 +6,6 @@ from typing import Protocol, TypeGuard, runtime_checkable
 from google.genai.types import Content, GenerateContentConfig, GenerateContentResponse
 
 
-class GenerateContent(Protocol):
-    """스트리밍 없는 SDK 함수 `client.aio.models.generate_content`의 모양."""
-
-    async def __call__(
-        self, *, model: str, contents: list[Content], config: GenerateContentConfig
-    ) -> GenerateContentResponse: ...
-
-
 class GenerateContentStream(Protocol):
     """스트리밍 SDK 함수 `client.aio.models.generate_content_stream`의 모양.
 

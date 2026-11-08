@@ -1,6 +1,6 @@
 """GeminiProvider 단위 테스트. 네트워크를 쓰지 않는다.
 
-SDK의 generate_content 자리에 가짜 함수를 넣고, 진짜 google-genai 타입(요청 Content, 응답,
+SDK의 generate_content_stream 자리에 가짜 함수를 넣고, 진짜 google-genai 타입(요청 Content, 응답,
 APIError)으로 변환, 재시도, 오류 매핑을 확인한다.
 """
 
@@ -20,23 +20,33 @@ from app.llm.gemini import GeminiProvider
 from app.llm.types import ModelTurn, ToolCall, ToolResult, ToolResultTurn, UserTurn
 from tests.fake_gemini import (
     TEXT_RESPONSE,
-    FakeGenerateContent,
     FakeGenerateContentStream,
     Stall,
     api_error,
+    as_single_chunk_streams,
     provider_with,
     response_with,
 )
 
 
-async def generate(provider: GeminiProvider) -> ModelTurn:
-    return await provider.generate(
-        system_instruction="system", turns=[UserTurn(text="Hi")], tools=ToolDispatcher().definitions()
-    )
+async def generate(provider: GeminiProvider, turns: list[UserTurn | ModelTurn | ToolResultTurn] | None = None) -> ModelTurn:
+    """스트림의 마지막 ModelTurn을 돌려준다. 한 번에 받는 호출은 없다."""
+    final: ModelTurn | None = None
+    async for item in provider.generate_stream(
+        system_instruction="system",
+        turns=turns if turns is not None else [UserTurn(text="Hi")],
+        tools=ToolDispatcher().definitions() if turns is None else [],
+    ):
+        match item:
+            case ModelTurn() as turn:
+                final = turn
+    if final is None:
+        raise AssertionError("ModelTurn이 없습니다.")
+    return final
 
 
 async def test_function_call_response_becomes_tool_call() -> None:
-    fake = FakeGenerateContent(
+    fake = as_single_chunk_streams(
         [
             response_with(
                 types.Part(text="Let me think about this.", thought=True),
@@ -59,13 +69,13 @@ async def test_function_call_response_becomes_tool_call() -> None:
 
 
 async def test_text_response_becomes_final_text() -> None:
-    turn = await generate(provider_with(FakeGenerateContent([TEXT_RESPONSE])))
+    turn = await generate(provider_with(as_single_chunk_streams([TEXT_RESPONSE])))
 
     assert turn == ModelTurn(text="Hello!", finish_reason="STOP")
 
 
 async def test_request_uses_manual_function_calling_and_settings() -> None:
-    fake = FakeGenerateContent([TEXT_RESPONSE])
+    fake = as_single_chunk_streams([TEXT_RESPONSE])
 
     await generate(provider_with(fake))
 
@@ -89,7 +99,7 @@ async def test_request_uses_manual_function_calling_and_settings() -> None:
 
 
 async def test_context_is_sent_in_gemini_function_calling_format() -> None:
-    fake = FakeGenerateContent([TEXT_RESPONSE])
+    fake = as_single_chunk_streams([TEXT_RESPONSE])
     turns = [
         UserTurn(text="Do you allow dogs?"),
         ModelTurn(
@@ -98,7 +108,7 @@ async def test_context_is_sent_in_gemini_function_calling_format() -> None:
         ToolResultTurn(results=[ToolResult(call_id="call-1", name="search_knowledge", content={"results": []})]),
     ]
 
-    await provider_with(fake).generate(system_instruction="system", turns=turns, tools=[])
+    await generate(provider_with(fake), turns)
 
     user, model, tool_result = fake.calls[0].contents
     assert (user.role, user.parts) == ("user", [types.Part(text="Do you allow dogs?")])
@@ -120,7 +130,7 @@ async def test_context_is_sent_in_gemini_function_calling_format() -> None:
 
 
 async def test_server_error_is_retried_then_succeeds() -> None:
-    fake = FakeGenerateContent([api_error(503, "UNAVAILABLE"), api_error(500, "INTERNAL"), TEXT_RESPONSE])
+    fake = as_single_chunk_streams([api_error(503, "UNAVAILABLE"), api_error(500, "INTERNAL"), TEXT_RESPONSE])
 
     turn = await generate(provider_with(fake))
 
@@ -129,7 +139,7 @@ async def test_server_error_is_retried_then_succeeds() -> None:
 
 
 async def test_server_error_after_all_attempts_is_unavailable() -> None:
-    fake = FakeGenerateContent([api_error(503, "UNAVAILABLE")] * 3)
+    fake = as_single_chunk_streams([api_error(503, "UNAVAILABLE")] * 3)
 
     with pytest.raises(LLMUnavailableError):
         await generate(provider_with(fake))
@@ -138,7 +148,7 @@ async def test_server_error_after_all_attempts_is_unavailable() -> None:
 
 
 async def test_rate_limit_is_retried_then_succeeds() -> None:
-    fake = FakeGenerateContent([api_error(429, "RESOURCE_EXHAUSTED"), TEXT_RESPONSE])
+    fake = as_single_chunk_streams([api_error(429, "RESOURCE_EXHAUSTED"), TEXT_RESPONSE])
 
     turn = await generate(provider_with(fake))
 
@@ -147,7 +157,7 @@ async def test_rate_limit_is_retried_then_succeeds() -> None:
 
 
 async def test_rate_limit_after_all_attempts_is_rate_limited_error() -> None:
-    fake = FakeGenerateContent([api_error(429, "RESOURCE_EXHAUSTED")] * 3)
+    fake = as_single_chunk_streams([api_error(429, "RESOURCE_EXHAUSTED")] * 3)
 
     with pytest.raises(LLMRateLimitedError) as exc_info:
         await generate(provider_with(fake))
@@ -166,7 +176,7 @@ async def test_rate_limit_after_all_attempts_is_rate_limited_error() -> None:
     ],
 )
 async def test_client_errors_are_not_retried(error: errors.APIError, expected: type[Exception]) -> None:
-    fake = FakeGenerateContent([error, TEXT_RESPONSE])
+    fake = as_single_chunk_streams([error, TEXT_RESPONSE])
 
     with pytest.raises(expected):
         await generate(provider_with(fake))
@@ -175,7 +185,7 @@ async def test_client_errors_are_not_retried(error: errors.APIError, expected: t
 
 
 async def test_slow_response_times_out_without_retry() -> None:
-    fake = FakeGenerateContent([Stall(seconds=5), TEXT_RESPONSE])
+    fake = as_single_chunk_streams([Stall(seconds=5), TEXT_RESPONSE])
 
     with pytest.raises(LLMTimeoutError) as exc_info:
         await generate(provider_with(fake, timeout_seconds=0.05))
@@ -186,7 +196,7 @@ async def test_slow_response_times_out_without_retry() -> None:
 
 async def test_sdk_http_timeout_is_timeout_error() -> None:
     # google-genai 3.x는 httpx2로 요청한다. SDK의 HttpOptions timeout이 먼저 끝나면 이 예외가 올라온다.
-    fake = FakeGenerateContent([httpx2.ReadTimeout("read timed out"), TEXT_RESPONSE])
+    fake = as_single_chunk_streams([httpx2.ReadTimeout("read timed out"), TEXT_RESPONSE])
 
     with pytest.raises(LLMTimeoutError):
         await generate(provider_with(fake))
@@ -195,7 +205,7 @@ async def test_sdk_http_timeout_is_timeout_error() -> None:
 
 
 async def test_connection_error_is_retried_then_unavailable() -> None:
-    fake = FakeGenerateContent([httpx2.ConnectError("refused")] * 2)
+    fake = as_single_chunk_streams([httpx2.ConnectError("refused")] * 2)
 
     with pytest.raises(LLMUnavailableError):
         await generate(provider_with(fake, max_attempts=2))
@@ -204,13 +214,11 @@ async def test_connection_error_is_retried_then_unavailable() -> None:
 
 
 async def test_blocked_prompt_returns_empty_turn() -> None:
-    fake = FakeGenerateContent(
-        [
-            types.GenerateContentResponse(
-                prompt_feedback=types.GenerateContentResponsePromptFeedback(block_reason=types.BlockedReason.SAFETY)
-            )
-        ]
-    )
+    fake = as_single_chunk_streams([
+        types.GenerateContentResponse(
+            prompt_feedback=types.GenerateContentResponsePromptFeedback(block_reason=types.BlockedReason.SAFETY)
+        )
+    ])
 
     turn = await generate(provider_with(fake))
 
@@ -224,8 +232,7 @@ async def test_aclose_closes_the_client() -> None:
         closed.append(True)
 
     provider = GeminiProvider(
-        FakeGenerateContent([]),
-        generate_content_stream=FakeGenerateContentStream([]),
+        FakeGenerateContentStream([]),
         model="m",
         max_output_tokens=1,
         timeout_seconds=1,

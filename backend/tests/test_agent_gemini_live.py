@@ -10,12 +10,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.service import AgentService
+from app.agent.service import AgentReply, AgentService
 from app.config import get_settings
 from app.llm.factory import create_llm_provider
 from app.llm.provider import LLMProvider
 from app.models import Conversation, Store, SupportTicket
-from tests.factories import create_business_hour, create_knowledge, create_store
+from tests.factories import create_business_hour, create_knowledge, create_message, create_store
 
 _settings = get_settings()
 
@@ -48,10 +48,22 @@ async def store(session: AsyncSession) -> Store:
     return store
 
 
+async def ask(session: AsyncSession, conversation: Conversation, provider: LLMProvider, text: str) -> AgentReply:
+    user_message = await create_message(session, conversation, text)
+    reply: AgentReply | None = None
+    async for event in AgentService(provider).reply_stream(session, conversation, user_message, []):
+        match event:
+            case AgentReply() as done:
+                reply = done
+    if reply is None:
+        raise AssertionError("답변이 없습니다.")
+    return reply
+
+
 async def test_live_scenario_a_store_address(
     session: AsyncSession, store: Store, conversation: Conversation, provider: LLMProvider
 ) -> None:
-    reply = await AgentService(provider).reply(session, store.id, conversation.id, "What is your store address?")
+    reply = await ask(session, conversation, provider, "What is your store address?")
 
     assert [e.name for e in reply.tool_executions] == ["get_store_profile"]
     assert "1427 Oak" in reply.content
@@ -64,7 +76,7 @@ async def test_live_scenario_b_knowledge(
         session, store, "Are dogs allowed inside?", "Only service dogs are allowed inside. Pets are welcome on the patio."
     )
 
-    reply = await AgentService(provider).reply(session, store.id, conversation.id, "Do you allow dogs inside?")
+    reply = await ask(session, conversation, provider, "Do you allow dogs inside?")
 
     assert [e.name for e in reply.tool_executions][:2] == ["get_store_profile", "search_knowledge"]
     assert "create_support_ticket" not in [e.name for e in reply.tool_executions]
@@ -73,9 +85,7 @@ async def test_live_scenario_b_knowledge(
 async def test_live_scenario_c_ticket(
     session: AsyncSession, store: Store, conversation: Conversation, provider: LLMProvider
 ) -> None:
-    reply = await AgentService(provider).reply(
-        session, store.id, conversation.id, "Can I get a refund after 60 days?"
-    )
+    reply = await ask(session, conversation, provider, "Can I get a refund after 60 days?")
 
     assert [e.name for e in reply.tool_executions] == [
         "get_store_profile",

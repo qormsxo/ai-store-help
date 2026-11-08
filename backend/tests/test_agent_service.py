@@ -1,5 +1,6 @@
 """AgentService + ToolDispatcher + 실제 PostgreSQL 테스트. LLM은 MockGeminiProvider(가짜)로 대체한다."""
 
+from dataclasses import dataclass
 from typing import get_args
 
 import pytest
@@ -8,7 +9,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.prompts import SYSTEM_INSTRUCTION
-from app.agent.service import AgentService
+from app.agent.service import AgentService, ToolExecution
 from app.agent.tools import (
     DEFAULT_TOOLS,
     AgentContext,
@@ -41,7 +42,7 @@ from app.models import (
 )
 from app.schemas import ErrorResponse, StoreProfile
 from app.services import chat_service
-from app.services.chat_service import ChatResult
+from app.services.chat_service import ReplyCompleted
 from app.services.conversation_service import HISTORY_LIMIT
 from tests.factories import create_conversation, create_knowledge, create_message, create_store
 from tests.mock_llm import (
@@ -63,6 +64,13 @@ async def store(session: AsyncSession) -> Store:
     return store
 
 
+@dataclass(frozen=True)
+class Asked:
+    user_message: Message
+    assistant_message: Message
+    tool_executions: list[ToolExecution]
+
+
 async def ask(
     agent: AgentService,
     session: AsyncSession,
@@ -70,9 +78,17 @@ async def ask(
     conversation: Conversation,
     text: str,
     history_limit: int = HISTORY_LIMIT,
-) -> ChatResult:
-    """실제 채팅 흐름(고객 메시지 저장 → Agent 실행 → 답변 저장)으로 Agent를 실행한다."""
-    return await chat_service.send_message(session, agent, store.id, conversation.id, text, history_limit)
+) -> Asked:
+    """실제 채팅 흐름(고객 메시지 저장 → 스트림으로 답변 저장)으로 Agent를 실행한다."""
+    stored = await chat_service.save_customer_message(session, store.id, conversation.id, text)
+    completed: ReplyCompleted | None = None
+    async for event in chat_service.stream_reply(session, agent, stored, history_limit):
+        match event:
+            case ReplyCompleted() as done:
+                completed = done
+    if completed is None:
+        raise AssertionError("답변이 저장되지 않았습니다.")
+    return Asked(stored.message, completed.assistant_message, completed.tool_executions)
 
 
 async def messages_of(session: AsyncSession, conversation: Conversation) -> list[Message]:

@@ -12,7 +12,6 @@ from app.errors import LLMTimeoutError, LLMUnavailableError
 from app.llm.gemini import GeminiProvider
 from app.llm.types import ModelTurn, StreamItem, TextDelta, ToolCall, UserTurn
 from tests.fake_gemini import (
-    FakeGenerateContent,
     FakeGenerateContentStream,
     Stall,
     api_error,
@@ -22,7 +21,7 @@ from tests.fake_gemini import (
 )
 
 def streaming(stream: FakeGenerateContentStream, *, timeout_seconds: float = 5) -> GeminiProvider:
-    return provider_with(FakeGenerateContent([]), stream, timeout_seconds=timeout_seconds)
+    return provider_with(stream, timeout_seconds=timeout_seconds)
 
 async def collect(provider: GeminiProvider) -> list[StreamItem]:
     return [

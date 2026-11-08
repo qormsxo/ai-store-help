@@ -33,7 +33,7 @@ from app.main import app
 from app.models import Conversation, ConversationStatus, Message as StoredMessage, MessageRole, Store, SupportTicket
 from app.schemas import MessageDeltaEvent, StreamErrorEvent
 from tests.factories import create_store
-from tests.fake_gemini import FakeGenerateContent, FakeGenerateContentStream, api_error, provider_with
+from tests.fake_gemini import FakeGenerateContentStream, api_error, provider_with
 from tests.mock_llm import Chunks, MockGeminiProvider, final_text, function_call
 
 REFUND_QUESTION = "Can I get a refund after 60 days?"
@@ -244,7 +244,7 @@ async def test_gemini_error_event_hides_provider_details_and_keeps_the_user_mess
 ) -> None:
     conversation_id = await start_conversation(client)
     fake_stream = FakeGenerateContentStream([api_error(400, "INVALID_ARGUMENT", "API key not valid: AIzaSyFAKE")])
-    use_agent(provider_with(FakeGenerateContent([]), fake_stream))
+    use_agent(provider_with(fake_stream))
 
     res = await stream(client, conversation_id, "Do you allow dogs inside?")
 
@@ -419,15 +419,3 @@ async def test_tool_calling_flow_is_kept_and_only_the_final_answer_is_streamed(
     ]
     assert ticket.source_message_id == saved[0].id
 
-async def test_non_streaming_endpoint_still_works_and_does_not_stream(
-    client: httpx.AsyncClient, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    provider = MockGeminiProvider([final_text("We open at 7 AM.")])
-    use_agent(provider)
-
-    res = await client.post(f"/api/conversations/{conversation_id}/messages", json={"content": "When do you open?"})
-
-    assert res.status_code == 201
-    assert res.json()["assistant_message"]["content"] == "We open at 7 AM."
-    assert res.headers["content-type"].startswith("application/json")

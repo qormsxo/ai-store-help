@@ -12,13 +12,12 @@ from google.genai.types import (
     Content,
     FunctionDeclaration,
     GenerateContentConfig,
-    GenerateContentResponse,
     Tool,
 )
 
 from app.errors import LLMTimeoutError, LLMUnavailableError
 from app.llm.gemini.convert import to_contents, to_declaration, to_model_turn, translate_api_error
-from app.llm.gemini.protocols import GenerateContent, GenerateContentStream, is_closable
+from app.llm.gemini.protocols import GenerateContentStream, is_closable
 from app.llm.types import ModelTurn, StreamItem, TextDelta, ToolCall, ToolDefinition, Turn
 
 logger = logging.getLogger(__name__)
@@ -32,14 +31,13 @@ class GeminiProvider:
 
     SDK가 Python 함수를 직접 실행하는 Automatic Function Calling은 끄고, 모델이 요청한
     function_call을 공통 ToolCall로 돌려준다. 실행과 반복은 AgentService가 한다.
-    generate는 응답 전체를, generate_stream은 Gemini Streaming API로 텍스트 조각을 받는 대로 돌려준다.
+    generate_stream은 Gemini Streaming API로 텍스트 조각을 받는 대로 돌려준다.
     """
 
     def __init__(
         self,
-        generate_content: GenerateContent,
-        *,
         generate_content_stream: GenerateContentStream,
+        *,
         model: str,
         max_output_tokens: int,
         timeout_seconds: float,
@@ -47,8 +45,7 @@ class GeminiProvider:
         max_attempts: int = 3,
         retry_base_delay: float = 1.0,
     ) -> None:
-        """SDK 호출 함수와 재시도 제한을 저장한다. create_gemini_provider가 만든다."""
-        self._generate_content = generate_content
+        """SDK 스트리밍 함수와 재시도 제한을 저장한다. create_gemini_provider가 만든다."""
         self._generate_content_stream = generate_content_stream
         self._model = model
         self._max_output_tokens = max_output_tokens
@@ -175,30 +172,3 @@ class GeminiProvider:
             if is_closable(stream):
                 await stream.aclose()
         yield ModelTurn(text="".join(texts) or None, tool_calls=tool_calls, finish_reason=finish_reason)
-
-    async def generate(
-        self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]
-    ) -> ModelTurn:
-        """스트리밍 없는 호출 한 번. 응답 전체를 ModelTurn 하나로 돌려준다."""
-        config = self._config(system_instruction, tools)
-        response = await self._generate_with_retry(to_contents(turns), config)
-        return to_model_turn(response)
-
-    async def _generate_with_retry(
-        self, contents: list[Content], config: GenerateContentConfig
-    ) -> GenerateContentResponse:
-        """generate용 재시도. 성공할 때까지가 아니라 최대 3번까지 다시 보낸다. 타임아웃은 바로 실패한다."""
-        attempt = 1
-        while True:
-            try:
-                async with asyncio.timeout(self._timeout_seconds):
-                    return await self._generate_content(model=self._model, contents=contents, config=config)
-            # google-genai 3.x의 전송 계층은 httpx2다(httpx가 아니다).
-            except (TimeoutError, httpx2.TimeoutException) as exc:
-                raise self._timeout_error() from exc
-            except APIError as exc:
-                failure = self._retryable_api_failure(exc, attempt)
-            except httpx2.TransportError as exc:
-                failure = self._retryable_transport_failure(exc, attempt)
-            await self._backoff(failure, attempt)
-            attempt += 1

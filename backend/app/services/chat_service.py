@@ -18,13 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ChatResult:
-    user_message: Message
-    assistant_message: Message
-    tool_executions: list[ToolExecution]
-
-
-@dataclass(frozen=True)
 class StoredCustomerMessage:
     """저장(커밋)이 끝난 고객 메시지와 그 대화. 이 뒤의 어떤 실패도 이 메시지를 지우지 않는다."""
 
@@ -60,49 +53,13 @@ async def save_customer_message(
     return StoredCustomerMessage(conversation, user_message)
 
 
-async def send_message(
-    session: AsyncSession,
-    agent: AgentService,
-    store_id: uuid.UUID,
-    conversation_id: uuid.UUID,
-    content: str,
-    history_limit: int = conversation_service.HISTORY_LIMIT,
-) -> ChatResult:
-    """고객 메시지를 저장하고, Agent가 만든 답변을 저장해서 돌려준다. 이 함수가 커밋한다.
-
-    트랜잭션을 둘로 나눈다.
-    1. 고객 메시지를 저장하고 바로 커밋한다(save_customer_message).
-    2. Agent를 실행하고, 답변과 Tool이 만든 티켓을 함께 커밋한다. 실패하면 이 단계만 롤백한다.
-       그래서 답변 없는 티켓이나 티켓 없는 안내 답변이 남지 않는다.
-    """
-    stored = await save_customer_message(session, store_id, conversation_id, content)
-    conversation, user_message = stored.conversation, stored.message
-
-    try:
-        history = await conversation_service.get_recent_dialogue(session, conversation, user_message, history_limit)
-        reply = await agent.reply(session, conversation, user_message, history)
-        assistant_message = await conversation_service.add_message(
-            session, conversation, MessageRole.ASSISTANT, reply.content
-        )
-        await session.commit()
-    except SQLAlchemyError as exc:
-        await session.rollback()
-        raise _storage_error("assistant reply", conversation_id, exc) from exc
-    except Exception:
-        # Agent와 LLM 오류는 그대로 올린다. 오류 응답으로 바꾸는 것은 예외 핸들러의 몫이다.
-        await session.rollback()
-        raise
-
-    return ChatResult(user_message, assistant_message, reply.tool_executions)
-
-
 async def stream_reply(
     session: AsyncSession,
     agent: AgentService,
     stored: StoredCustomerMessage,
     history_limit: int = conversation_service.HISTORY_LIMIT,
 ) -> AsyncGenerator[ChatStreamEvent]:
-    """send_message의 2단계를 스트리밍으로 한다. 답변 텍스트를 TextDelta로 내보내고, 저장하면 ReplyCompleted를 낸다.
+    """저장된 고객 메시지에 스트리밍으로 답한다. 답변 텍스트를 TextDelta로 내보내고, 저장하면 ReplyCompleted를 낸다.
 
     답변은 끝까지 생성된 뒤에 Assistant 메시지 하나로 저장한다. 조각마다 저장하지 않는다.
     생성이 실패하거나 호출하는 쪽이 중간에 멈추면(연결 종료) 저장하지 않고 롤백한다. 불완전한 답변이 완료된
