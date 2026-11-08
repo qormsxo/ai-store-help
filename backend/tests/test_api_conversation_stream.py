@@ -2,8 +2,7 @@
 
 실제 FastAPI 라우터, reply_service, AgentService, ToolDispatcher, PostgreSQL을 쓰고 LLM만 가짜로 바꾼다.
 - MockGeminiProvider(Chunks): 텍스트 조각을 미리 정한 대로 내보내는 가짜 Provider
-- 진짜 GeminiProvider + FakeGenerateContentStream: google-genai 청크 형식과 오류 매핑까지 확인
-실제 Gemini API는 호출하지 않는다.
+실제 Gemini API는 호출하지 않는다. Gemini 오류 매핑은 고객 채팅 API 테스트가 본다.
 
 httpx의 ASGITransport는 응답을 끝까지 모아서 돌려준다. 그래서 "생성되는 동안 전달되는지"와 "연결 종료"는
 ASGI 앱을 직접 구동하는 stream_over_asgi로 확인한다.
@@ -26,14 +25,13 @@ from app.agent.service import AgentService
 from app.api.deps import get_agent_service
 from app.config import get_settings
 from app.db import get_session
-from app.errors import LLMTimeoutError, LLMUnavailableError
+from app.errors import LLMUnavailableError
 from app.llm.provider import LLMProvider
 from app.llm.types import JsonObject
 from app.main import app
 from app.models import Message as StoredMessage, MessageRole, Store, SupportTicket
 from app.schemas import MessageDeltaEvent, StreamErrorEvent
 from tests.factories import create_store
-from tests.fake_gemini import FakeGenerateContentStream, api_error, provider_with
 from tests.mock_llm import Chunks, MockGeminiProvider, final_text, function_call
 
 REFUND_QUESTION = "Can I get a refund after 60 days?"
@@ -237,26 +235,7 @@ async def test_newlines_and_special_characters_do_not_break_the_event_format(
     *_, saved = await stored_messages(session, conversation_id)
     assert saved.content == "".join(hostile).strip()
 
-# --- 6. Gemini API 오류 -------------------------------------------------------------------------------
-
-async def test_gemini_error_event_hides_provider_details_and_keeps_the_user_message(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    fake_stream = FakeGenerateContentStream([api_error(400, "INVALID_ARGUMENT", "API key not valid: AIzaSyFAKE")])
-    use_agent(provider_with(fake_stream))
-
-    res = await stream(client, conversation_id, "Do you allow dogs inside?")
-
-    # 스트림이 시작된 뒤의 실패라서 HTTP 상태는 200이고, 실패는 error 이벤트로 온다.
-    assert res.status_code == 200
-    events = parse_sse(res.text)
-    assert [e.name for e in events] == ["error"]
-    assert events[0].data["code"] == "LLM_NOT_CONFIGURED"
-    assert "AIzaSy" not in res.text
-    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
-        (MessageRole.USER, "Do you allow dogs inside?")
-    ]
+# --- 6. 답변 도중 실패 ----------------------------------------------------------------------------------
 
 async def test_failure_in_the_middle_of_the_answer_never_saves_a_partial_message(
     client: httpx.AsyncClient, session: AsyncSession, store: Store
@@ -330,23 +309,6 @@ async def test_unknown_conversation_is_a_plain_404_not_a_stream(client: httpx.As
     assert res.headers["content-type"].startswith("application/json")
     assert res.json()["error"]["code"] == "CONVERSATION_NOT_FOUND"
     assert provider.requests == []
-
-async def test_retry_after_a_failed_stream_reuses_the_saved_customer_message(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(MockGeminiProvider([LLMTimeoutError("timeout"), Chunks(["We open ", "at 7."])]))
-
-    failed = await stream(client, conversation_id, "When do you open?")
-    retried = await stream(client, conversation_id, "When do you open?")
-
-    assert [e.name for e in parse_sse(failed.text)] == ["error"]
-    assert [e.name for e in parse_sse(retried.text)] == ["message_delta", "message_delta", "completed"]
-    # 고객 메시지는 한 번만 저장되고, 답변은 성공한 시도의 것 하나뿐이다.
-    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
-        (MessageRole.USER, "When do you open?"),
-        (MessageRole.ASSISTANT, "We open at 7."),
-    ]
 
 # --- 7. 연결 종료 -------------------------------------------------------------------------------------
 

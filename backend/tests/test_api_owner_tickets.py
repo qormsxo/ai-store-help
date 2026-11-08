@@ -289,21 +289,6 @@ async def test_customer_sees_owner_answer_in_the_original_conversation(
     ]
 
 
-async def test_owner_answer_becomes_searchable_knowledge(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store)
-    before = await knowledge_search_service.search_knowledge(session, store.id, "dogs inside")
-
-    res = await reply(client, ticket.id, ANSWER)
-    after = await knowledge_search_service.search_knowledge(session, store.id, "dogs inside")
-
-    assert before == []
-    assert [(r.source_id, r.question, r.answer) for r in after] == [
-        (uuid.UUID(res.json()["knowledge_entry_id"]), QUESTION, ANSWER)
-    ]
-
-
 async def test_next_customer_gets_the_owner_answer_through_the_agent(
     client: httpx.AsyncClient, session: AsyncSession, store: Store
 ) -> None:

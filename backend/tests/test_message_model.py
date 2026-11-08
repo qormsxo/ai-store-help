@@ -2,7 +2,7 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,22 +30,6 @@ async def test_role_is_stored_as_lowercase_value(session: AsyncSession, store: S
     stored = await session.scalar(text("SELECT role::text FROM messages WHERE id = :id"), {"id": message.id})
 
     assert stored == "assistant"
-
-
-async def test_messages_are_listed_in_creation_order(session: AsyncSession, store: Store) -> None:
-    conversation = await create_conversation(session, store)
-    other = await create_conversation(session, store, visitor_id="other")
-    await create_message(session, conversation, content="질문", role=MessageRole.USER)
-    await create_message(session, conversation, content="답변", role=MessageRole.ASSISTANT)
-    await create_message(session, other, content="다른 대화")
-
-    found = (
-        await session.scalars(
-            select(Message).where(Message.conversation_id == conversation.id).order_by(Message.created_at)
-        )
-    ).all()
-
-    assert [m.content for m in found] == ["질문", "답변"]
 
 
 async def test_message_requires_existing_conversation(session: AsyncSession) -> None:

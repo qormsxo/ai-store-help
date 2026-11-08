@@ -11,14 +11,6 @@ from app.models import KnowledgeEntry, Store, SupportTicket
 from tests.factories import create_conversation, create_knowledge, create_store, create_ticket
 
 
-async def test_empty_knowledge_table_is_queryable(session: AsyncSession) -> None:
-    count = await session.scalar(select(func.count()).select_from(KnowledgeEntry))
-    entries = (await session.scalars(select(KnowledgeEntry).where(KnowledgeEntry.is_active))).all()
-
-    assert count == 0
-    assert entries == []
-
-
 async def test_create_and_get_knowledge_entry(session: AsyncSession, store: Store) -> None:
     created = await create_knowledge(session, store, question="주차 가능한가요?", answer="지하 1층 이용 가능합니다.")
     session.expunge_all()

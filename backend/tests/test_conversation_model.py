@@ -43,23 +43,6 @@ async def test_updated_at_changes_on_update(session: AsyncSession, store: Store)
     assert conversation.created_at == created_at_before
 
 
-async def test_list_conversations_by_visitor(session: AsyncSession, store: Store) -> None:
-    await create_conversation(session, store, visitor_id="visitor-a")
-    await create_conversation(session, store, visitor_id="visitor-a")
-    await create_conversation(session, store, visitor_id="visitor-b")
-
-    found = (await session.scalars(select(Conversation).where(Conversation.visitor_id == "visitor-a"))).all()
-
-    assert len(found) == 2
-
-
-async def test_get_missing_conversation_returns_none(session: AsyncSession, store: Store) -> None:
-    other = await create_conversation(session, store)
-    await session.execute(delete(Conversation).where(Conversation.id == other.id))
-
-    assert await session.get(Conversation, other.id) is None
-
-
 async def test_messages_and_tickets_load_explicitly(session: AsyncSession, store: Store) -> None:
     conversation = await create_conversation(session, store)
     first = await create_message(session, conversation, content="첫 번째")

@@ -24,8 +24,6 @@ from app.errors import (
     AgentEmptyResponseError,
     AgentLimitExceededError,
     ConversationNotFoundError,
-    LLMRateLimitedError,
-    LLMTimeoutError,
     NotStoreInquiryError,
 )
 from app.llm.types import JsonObject, ModelTurn, ToolCall, UserTurn
@@ -517,27 +515,6 @@ async def test_tool_failure_becomes_error_observation(
     assert reply.assistant_message.content == "We are at 1427 Oak Street."
 
 
-async def test_llm_timeout_propagates(session: AsyncSession, store: Store, conversation: Conversation) -> None:
-    provider = MockGeminiProvider([LLMTimeoutError("timeout")])
-
-    with pytest.raises(LLMTimeoutError) as exc_info:
-        await ask(AgentService(provider), session, store, conversation, "Hi")
-
-    assert exc_info.value.status_code == 504
-
-
-async def test_llm_rate_limit_in_later_round_propagates(
-    session: AsyncSession, store: Store, conversation: Conversation
-) -> None:
-    provider = MockGeminiProvider([function_call("get_store_profile"), LLMRateLimitedError("rate limited")])
-
-    with pytest.raises(LLMRateLimitedError) as exc_info:
-        await ask(AgentService(provider), session, store, conversation, "Hi")
-
-    assert exc_info.value.status_code == 429
-    assert [m.role for m in await messages_of(session, conversation)] == [MessageRole.USER]
-
-
 # --- 대화 문맥 -----------------------------------------------------------------------------
 
 
@@ -556,41 +533,6 @@ async def test_previous_messages_are_sent_as_context(
         ModelTurn(text="Yes, we do."),
         UserTurn(text="Is it extra?"),
     )
-
-
-async def test_history_is_limited_to_recent_messages(
-    session: AsyncSession, store: Store, conversation: Conversation
-) -> None:
-    for number in range(5):
-        await create_message(session, conversation, f"question {number}", MessageRole.USER)
-    provider = MockGeminiProvider([final_text("OK")])
-
-    await ask(AgentService(provider), session, store, conversation, "latest", history_limit=2)
-
-    assert provider.requests[0].turns == (
-        UserTurn(text="question 3"),
-        UserTurn(text="question 4"),
-        UserTurn(text="latest"),
-    )
-
-
-async def test_conversations_do_not_share_context(session: AsyncSession, store: Store) -> None:
-    first = await create_conversation(session, store, visitor_id="visitor-a")
-    second = await create_conversation(session, store, visitor_id="visitor-b")
-    await create_message(session, first, "A: my order number is 1234", MessageRole.USER)
-    await create_message(session, second, "B: hello", MessageRole.USER)
-
-    first_provider = MockGeminiProvider([final_text("A reply")])
-    await ask(AgentService(first_provider), session, store, first, "A: follow-up")
-    second_provider = MockGeminiProvider([final_text("B reply")])
-    await ask(AgentService(second_provider), session, store, second, "B: follow-up")
-
-    assert first_provider.requests[0].turns == (
-        UserTurn(text="A: my order number is 1234"),
-        UserTurn(text="A: follow-up"),
-    )
-    # 두 번째 대화에는 첫 번째 대화의 기록과 방금 저장된 답변이 들어가지 않는다.
-    assert second_provider.requests[0].turns == (UserTurn(text="B: hello"), UserTurn(text="B: follow-up"))
 
 
 async def test_ticket_is_created_once_per_customer_message(

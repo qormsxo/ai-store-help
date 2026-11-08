@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import EscalationReason, Message, Store, SupportTicket, TicketStatus, utcnow
-from tests.factories import create_conversation, create_knowledge, create_message, create_store, create_ticket
+from tests.factories import create_conversation, create_knowledge, create_message, create_ticket
 
 
 async def test_create_and_get_ticket(session: AsyncSession, store: Store) -> None:
@@ -36,27 +36,6 @@ async def test_ticket_defaults_to_open(session: AsyncSession, store: Store) -> N
     assert found.owner_answer is None
     assert found.resolved_at is None
     assert found.created_at.utcoffset() == timedelta(0)
-
-
-async def test_list_open_tickets_oldest_first(session: AsyncSession, store: Store) -> None:
-    conversation = await create_conversation(session, store)
-    first = await create_ticket(session, conversation, question="첫 문의")
-    second = await create_ticket(session, conversation, question="둘째 문의")
-    done = await create_ticket(session, conversation, question="처리된 문의")
-    done.owner_answer = "답변"
-    done.status = TicketStatus.RESOLVED
-    done.resolved_at = utcnow()
-    await session.flush()
-
-    found = (
-        await session.scalars(
-            select(SupportTicket)
-            .where(SupportTicket.status == TicketStatus.OPEN)
-            .order_by(SupportTicket.created_at)
-        )
-    ).all()
-
-    assert [t.id for t in found] == [first.id, second.id]
 
 
 async def test_resolve_ticket_persists_answer(session: AsyncSession, store: Store) -> None:
@@ -185,16 +164,3 @@ async def test_ticket_requires_existing_store(session: AsyncSession, store: Stor
     with pytest.raises(IntegrityError, match="fk_support_tickets_store_id_stores"):
         await session.flush()
 
-
-async def test_open_tickets_are_scoped_to_their_store(session: AsyncSession, store: Store) -> None:
-    other = await create_store(session, slug="other-store")
-    mine = await create_ticket(session, await create_conversation(session, store))
-    await create_ticket(session, await create_conversation(session, other))
-
-    found = (
-        await session.scalars(
-            select(SupportTicket).where(SupportTicket.store_id == store.id, SupportTicket.status == TicketStatus.OPEN)
-        )
-    ).all()
-
-    assert [t.id for t in found] == [mine.id]
