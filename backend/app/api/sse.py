@@ -34,6 +34,7 @@ async def stream_chat_events(request: Request, events: AsyncGenerator[ReplyStrea
     try:
         while True:
             pending = asyncio.create_task(_next_event(events))
+            # 태스크를 실행하면서 (실제로 asyncio.wait() 에서 제너레이터가 실행 )고객 연결이 끊겼는지 확인
             while not (await asyncio.wait({pending}, timeout=_DISCONNECT_POLL_SECONDS))[0]:
                 if await request.is_disconnected():
                     logger.info("Client disconnected while streaming the reply")
@@ -50,6 +51,7 @@ async def stream_chat_events(request: Request, events: AsyncGenerator[ReplyStrea
                 )
                 return
             match event:
+                # none 인경우는 제너레이터가 끝났을때.
                 case None:
                     return
                 case TextDelta(text=text):

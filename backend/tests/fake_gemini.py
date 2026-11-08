@@ -46,6 +46,7 @@ class FakeGenerateContentStream:
         self, *, model: str, contents: list[types.Content], config: types.GenerateContentConfig
     ) -> AsyncGenerator[types.GenerateContentResponse]:
         self.calls.append(RecordedCall(model, list(contents), config))
+        # 청크는 여기서 보내지 않는다. 호출이 실패면 예외를 던지고, 아니면 제너레이터만 돌려준다.
         match self.streams.pop(0):
             case Exception() as error:
                 raise error
@@ -73,6 +74,7 @@ def provider_with(
     timeout_seconds: float = 5,
     max_attempts: int = 3,
 ) -> GeminiProvider:
+    # retry_base_delay=0이라 재시도 테스트가 1초, 2초를 기다리지 않는다.
     return GeminiProvider(
         stream,
         model="gemini-test-model",

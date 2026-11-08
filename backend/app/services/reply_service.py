@@ -71,6 +71,7 @@ async def stream_reply(
     committed = False
     completed: ReplyCompleted | None = None
     try:
+        # 방금 저장한 고객 메세지는 제외하고 최근 대화 내역을 가져온다. 
         history = await conversation_service.get_recent_dialogue(
             session, stored.conversation, stored.message, history_limit
         )

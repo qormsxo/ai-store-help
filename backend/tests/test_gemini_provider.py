@@ -1,7 +1,6 @@
 """GeminiProvider 단위 테스트. 네트워크를 쓰지 않는다.
 
-SDK의 generate_content_stream 자리에 가짜 함수를 넣고, 진짜 google-genai 타입(요청 Content, 응답,
-APIError)으로 변환, 재시도, 오류 매핑을 확인한다.
+조각 순서와 요청 형식은 test_gemini_streaming.py가 본다. 여기는 대화 변환, 재시도 소진, 오류 매핑만 본다.
 """
 
 import httpx2
@@ -25,7 +24,6 @@ from tests.fake_gemini import (
     api_error,
     as_single_chunk_streams,
     provider_with,
-    response_with,
 )
 
 
@@ -43,59 +41,6 @@ async def generate(provider: GeminiProvider, turns: list[UserTurn | ModelTurn | 
     if final is None:
         raise AssertionError("ModelTurn이 없습니다.")
     return final
-
-
-async def test_function_call_response_becomes_tool_call() -> None:
-    fake = as_single_chunk_streams(
-        [
-            response_with(
-                types.Part(text="Let me think about this.", thought=True),
-                types.Part(
-                    function_call=types.FunctionCall(id="call-1", name="search_knowledge", args={"query": "dogs"}),
-                    thought_signature=b"signature-1",
-                ),
-            )
-        ]
-    )
-
-    turn = await generate(provider_with(fake))
-
-    # 생각(thought) 파트는 고객 답변 텍스트로 쓰지 않는다.
-    assert turn.text is None
-    assert turn.tool_calls == [
-        ToolCall(id="call-1", name="search_knowledge", arguments={"query": "dogs"}, signature=b"signature-1")
-    ]
-    assert turn.finish_reason == "STOP"
-
-
-async def test_text_response_becomes_final_text() -> None:
-    turn = await generate(provider_with(as_single_chunk_streams([TEXT_RESPONSE])))
-
-    assert turn == ModelTurn(text="Hello!", finish_reason="STOP")
-
-
-async def test_request_uses_manual_function_calling_and_settings() -> None:
-    fake = as_single_chunk_streams([TEXT_RESPONSE])
-
-    await generate(provider_with(fake))
-
-    call = fake.calls[0]
-    assert call.model == "gemini-test-model"
-    assert call.config.system_instruction == "system"
-    assert call.config.max_output_tokens == 1024
-    # SDK가 Python 함수를 직접 실행하지 않는다.
-    assert call.config.automatic_function_calling == types.AutomaticFunctionCallingConfig(disable=True)
-    assert call.config.tools is not None
-    declarations = call.config.tools[0].function_declarations or []
-    assert [d.name for d in declarations] == [
-        "get_store_profile",
-        "search_knowledge",
-        "create_support_ticket",
-        "reject_not_inquiry",
-    ]
-    assert declarations[0].parameters_json_schema is None
-    search_schema = ToolDispatcher().definitions()[1].parameters
-    assert declarations[1].parameters_json_schema == search_schema
 
 
 async def test_context_is_sent_in_gemini_function_calling_format() -> None:
@@ -129,15 +74,6 @@ async def test_context_is_sent_in_gemini_function_calling_format() -> None:
     assert fake.calls[0].config.tools is None
 
 
-async def test_server_error_is_retried_then_succeeds() -> None:
-    fake = as_single_chunk_streams([api_error(503, "UNAVAILABLE"), api_error(500, "INTERNAL"), TEXT_RESPONSE])
-
-    turn = await generate(provider_with(fake))
-
-    assert turn.text == "Hello!"
-    assert len(fake.calls) == 3
-
-
 async def test_server_error_after_all_attempts_is_unavailable() -> None:
     fake = as_single_chunk_streams([api_error(503, "UNAVAILABLE")] * 3)
 
@@ -145,15 +81,6 @@ async def test_server_error_after_all_attempts_is_unavailable() -> None:
         await generate(provider_with(fake))
 
     assert len(fake.calls) == 3
-
-
-async def test_rate_limit_is_retried_then_succeeds() -> None:
-    fake = as_single_chunk_streams([api_error(429, "RESOURCE_EXHAUSTED"), TEXT_RESPONSE])
-
-    turn = await generate(provider_with(fake))
-
-    assert turn.text == "Hello!"
-    assert len(fake.calls) == 2
 
 
 async def test_rate_limit_after_all_attempts_is_rate_limited_error() -> None:

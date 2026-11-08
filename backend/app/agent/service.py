@@ -24,6 +24,8 @@ _ROUND_SEPARATOR = "\n\n"
 
 
 class ToolExecution(BaseModel):
+    """실행이 끝난 도구의 이름과 실패 여부. 결과 본문이 아니고, 손님 화면에도 안 나간다."""
+
     name: str
     is_error: bool
 
@@ -84,22 +86,27 @@ class AgentService:
     ) -> tuple[AgentContext, list[Turn]]:
         context = AgentContext(session=session, conversation=conversation, source_message_id=user_message.id)
         # 실행 Context는 요청마다 새로 만든다. 다른 대화의 기록이 섞일 수 있는 공유 상태가 없다.
+        # history에는 이번 질문이 없다. 이전 글만 Turn으로 바꾼 뒤 이번 질문을 맨 끝에 붙인다.
         turns: list[Turn] = [_to_turn(message) for message in history]
         turns.append(UserTurn(text=user_message.content))
         return context, turns
 
     async def _events(self, context: AgentContext, turns: list[Turn]) -> AsyncGenerator[TextDelta | AgentReply]:
         definitions = self._dispatcher.definitions()
+        # 이번 요청에서 이미 실행한 도구. 마지막 AgentReply에 순서대로 붙이고, 화면 문구에는 안 쓴다.
         executions: list[ToolExecution] = []
         # 스트리밍으로 고객에게 이미 보낸 텍스트. 저장하는 답변은 화면에 보인 것과 같아야 하므로 이것을 쓴다.
         shown: list[str] = []
 
+        # llm_round는 1부터 6까지 번호다. 아래 _llm_round와 이름만 비슷하고, 하는 일이 다르다.
         for llm_round in range(1, self._max_llm_rounds + 1):
             model_turn: ModelTurn | None = None
+            # 이 라운드에서 글자 조각을 이미 냈는지. 다음 라운드 글자 앞에 빈 줄을 한 번만 넣으려고 쓴다.
             round_started_text = False
             async with aclosing(self._llm_round(turns, definitions)) as items:
                 async for item in items:
                     match item:
+                        # TextDelta는 고객에게 보낼 응답
                         case TextDelta():
                             if shown and not round_started_text:
                                 shown.append(_ROUND_SEPARATOR)
@@ -107,18 +114,23 @@ class AgentService:
                             round_started_text = True
                             shown.append(item.text)
                             yield item
+                        # 이번 Gemini 호출의 마지막. 도구가 있을 수도, 글자만 있을 수도 있다. 실행은 아래 if에서 가른다.
                         case ModelTurn():
                             model_turn = item
             if model_turn is None:
                 raise AgentEmptyResponseError("AI가 답변을 만들지 못했습니다. 다시 시도해 주세요.")
+
             # Function Call이 담긴 모델 응답도 그대로 Context에 남겨야 다음 요청에서 결과와 짝이 맞는다.
             turns.append(model_turn)
 
+            # tool_calls는 리스트다. 그중 하나라도 reject_not_inquiry면 나머지는 실행하지 않는다.
             if any(call.name == "reject_not_inquiry" for call in model_turn.tool_calls):
                 # 다른 Tool과 같이 왔어도 실행하지 않는다. 티켓을 만들거나 답을 저장하지 않는다.
                 logger.info("Rejected a message that is not a store inquiry: conversation=%s", context.conversation.id)
                 raise NotStoreInquiryError("매장에 대한 문의만 답변할 수 있습니다.")
 
+            # 정상 종료. 프로필만으로 답하거나, 도구를 쓴 뒤 마지막 라운드에서 글자만 올 때다.
+            # 1라운드에 도구 없이 글자만 와도 코드는 그 글자를 답으로 받는다.
             if not model_turn.tool_calls:
                 if model_turn.text and model_turn.text.strip():
                     logger.info(
@@ -127,6 +139,7 @@ class AgentService:
                         llm_round,
                         [execution.name for execution in executions],
                     )
+                    # 화면으로 나간 조각이 있으면 그것을 잇는다. 조각이 없으면 ModelTurn에만 있는 글자를 쓴다.
                     content = "".join(shown).strip() if shown else model_turn.text.strip()
                     yield AgentReply(content=content, tool_executions=executions)
                     return
@@ -135,8 +148,10 @@ class AgentService:
                     context.conversation.id,
                     model_turn.finish_reason,
                 )
+                # 도구도 없고, 공백을 빼면 글자도 없다.
                 raise AgentEmptyResponseError("AI가 답변을 만들지 못했습니다. 다시 시도해 주세요.")
 
+            # 이미 실행한 개수와 이번에 요청한 개수의 합이 6을 넘으면 실행하지 않는다.
             if len(executions) + len(model_turn.tool_calls) > self._max_tool_calls:
                 logger.error(
                     "Tool call limit (%d) exceeded: conversation=%s tools=%s",
@@ -146,6 +161,8 @@ class AgentService:
                 )
                 raise AgentLimitExceededError("AI가 답변을 정리하지 못했습니다. 다시 시도해 주세요.")
 
+            # 한 응답에 도구가 여러 개일 수 있다. 프롬프트는 조회 다음 검색이지만, 모델이 한 번에 넣으면 이 순서대로 실행한다.
+            # ToolResult를 턴에 하나씩 붙이지 않는다. 결과 리스트 전체를 ToolResultTurn 하나에 넣는다.
             results = [await self._dispatcher.dispatch(context, call) for call in model_turn.tool_calls]
             executions += [ToolExecution(name=result.name, is_error=result.is_error) for result in results]
             turns.append(ToolResultTurn(results=results))
@@ -156,10 +173,12 @@ class AgentService:
         raise AgentLimitExceededError("AI가 답변을 정리하지 못했습니다. 다시 시도해 주세요.")
 
     def _llm_round(self, turns: list[Turn], definitions: Sequence[ToolDefinition]) -> AsyncGenerator[StreamItem]:
+        """Gemini 스트림 객체를 만들어 돌려준다. """
         return self._provider.generate_stream(system_instruction=SYSTEM_INSTRUCTION, turns=turns, tools=definitions)
 
 
 def _to_turn(message: Message) -> Turn:
+    # role은 그 줄의 작성자다. user는 손님 글, 그 외(AI 답)는 글자만 있는 ModelTurn이다.
     if message.role is MessageRole.USER:
         return UserTurn(text=message.content)
     return ModelTurn(text=message.content)

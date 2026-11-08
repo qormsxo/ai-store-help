@@ -161,8 +161,10 @@ class GeminiProvider:
                     async with asyncio.timeout(self._timeout_seconds):
                         chunk = await anext(chunks)
                 except StopAsyncIteration:
+                    # 도구만 온 응답도 여기로 끝난다. 글자 yield 없이 아래 ModelTurn 하나만 나간다.
                     break
                 part = to_model_turn(chunk)
+                # 도구 호출은 조각마다 내보내지 않고 모았다가 마지막 ModelTurn에 넣는다.
                 tool_calls += part.tool_calls
                 finish_reason = part.finish_reason or finish_reason
                 if part.text:

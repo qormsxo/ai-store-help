@@ -15,8 +15,8 @@ from tests.fake_gemini import (
     FakeGenerateContentStream,
     Stall,
     api_error,
-    function_call_response,
     provider_with,
+    response_with,
     text_response,
 )
 
@@ -43,27 +43,28 @@ async def test_text_chunks_are_delivered_in_order_then_the_assembled_turn() -> N
         ModelTurn(text="Our store is open 9 to 6.", finish_reason="STOP"),
     ]
 
-async def test_each_chunk_is_delivered_before_the_next_one_is_read() -> None:
-    """응답을 다 받고 나서 내보내지 않는다. 첫 조각은 두 번째 청크가 오류를 내기 전에 이미 나온다."""
-    stream = FakeGenerateContentStream([[text_response("First"), api_error(500, "INTERNAL")]])
-    items = streaming(stream, timeout_seconds=5).generate_stream(
-        system_instruction="system", turns=[UserTurn(text="Hi")], tools=[]
-    )
-
-    assert await anext(items) == TextDelta(text="First")
-    with pytest.raises(LLMUnavailableError):
-        await anext(items)
-
 async def test_function_call_chunk_is_not_text_and_keeps_the_signature() -> None:
-    stream = FakeGenerateContentStream([[function_call_response("search_knowledge", "call-1", query="dogs")]])
+    stream = FakeGenerateContentStream(
+        [
+            [
+                response_with(
+                    types.Part(text="Let me think about this.", thought=True),
+                    types.Part(
+                        function_call=types.FunctionCall(id="call-1", name="search_knowledge", args={"query": "dogs"}),
+                        thought_signature=b"signature-1",
+                    ),
+                )
+            ]
+        ]
+    )
 
     items = await collect(streaming(stream))
 
-    # Function Call은 TextDelta로 나오지 않고 마지막 ModelTurn에만 담긴다.
+    # 생각(thought) 파트와 Function Call은 TextDelta로 나오지 않는다. 호출은 마지막 ModelTurn에만 담긴다.
     assert items == [
         ModelTurn(
             tool_calls=[
-                ToolCall(id="call-1", name="search_knowledge", arguments={"query": "dogs"}, signature=b"signature-call-1")
+                ToolCall(id="call-1", name="search_knowledge", arguments={"query": "dogs"}, signature=b"signature-1")
             ],
             finish_reason="STOP",
         )
@@ -78,14 +79,18 @@ async def test_stream_request_uses_manual_function_calling_and_the_full_context(
     assert call.model == "gemini-test-model"
     assert call.contents == [types.Content(role="user", parts=[types.Part(text="Hi")])]
     assert call.config.system_instruction == "system"
+    assert call.config.max_output_tokens == 1024
     assert call.config.automatic_function_calling == types.AutomaticFunctionCallingConfig(disable=True)
-    declared = [d.name for tool in call.config.tools or [] for d in tool.function_declarations or []]
-    assert declared == [
+    assert call.config.tools is not None
+    declarations = call.config.tools[0].function_declarations or []
+    assert [d.name for d in declarations] == [
         "get_store_profile",
         "search_knowledge",
         "create_support_ticket",
         "reject_not_inquiry",
     ]
+    assert declarations[0].parameters_json_schema is None
+    assert declarations[1].parameters_json_schema == ToolDispatcher().definitions()[1].parameters
 
 # --- 재시도: 고객에게 아무것도 보내기 전에만 ----------------------------------------------------------
 
