@@ -47,10 +47,6 @@ class ConversationNotFoundError(NotFoundError):
     code = "CONVERSATION_NOT_FOUND"
 
 
-class ConversationClosedError(ConflictError):
-    code = "CONVERSATION_CLOSED"
-
-
 class TicketNotFoundError(NotFoundError):
     code = "TICKET_NOT_FOUND"
 

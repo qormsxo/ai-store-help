@@ -23,7 +23,6 @@ from app.agent.tools import (
 from app.errors import (
     AgentEmptyResponseError,
     AgentLimitExceededError,
-    ConversationClosedError,
     ConversationNotFoundError,
     LLMRateLimitedError,
     LLMTimeoutError,
@@ -32,7 +31,6 @@ from app.errors import (
 from app.llm.types import JsonObject, ModelTurn, ToolCall, UserTurn
 from app.models import (
     Conversation,
-    ConversationStatus,
     EscalationReason,
     Message,
     MessageRole,
@@ -41,8 +39,8 @@ from app.models import (
     TicketStatus,
 )
 from app.schemas import ErrorResponse, StoreProfile
-from app.services import chat_service
-from app.services.chat_service import ReplyCompleted
+from app.services import reply_service
+from app.services.reply_service import ReplyCompleted
 from app.services.conversation_service import HISTORY_LIMIT
 from tests.factories import create_conversation, create_knowledge, create_message, create_store
 from tests.mock_llm import (
@@ -80,9 +78,9 @@ async def ask(
     history_limit: int = HISTORY_LIMIT,
 ) -> Asked:
     """실제 채팅 흐름(고객 메시지 저장 → 스트림으로 답변 저장)으로 Agent를 실행한다."""
-    stored = await chat_service.save_customer_message(session, store.id, conversation.id, text)
+    stored = await reply_service.save_customer_message(session, store.id, conversation.id, text)
     completed: ReplyCompleted | None = None
-    async for event in chat_service.stream_reply(session, agent, stored, history_limit):
+    async for event in reply_service.stream_reply(session, agent, stored, history_limit):
         match event:
             case ReplyCompleted() as done:
                 completed = done
@@ -623,19 +621,6 @@ async def test_other_store_conversation_is_not_found(session: AsyncSession, stor
 
     with pytest.raises(ConversationNotFoundError):
         await ask(AgentService(provider), session, store, other_conversation, "Hi")
-
-    assert provider.requests == []
-
-
-async def test_closed_conversation_is_rejected(
-    session: AsyncSession, store: Store, conversation: Conversation
-) -> None:
-    conversation.status = ConversationStatus.CLOSED
-    await session.flush()
-    provider = MockGeminiProvider([final_text("never")])
-
-    with pytest.raises(ConversationClosedError):
-        await ask(AgentService(provider), session, store, conversation, "Hi")
 
     assert provider.requests == []
 

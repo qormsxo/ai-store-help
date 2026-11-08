@@ -1,6 +1,6 @@
 """고객 채팅 SSE 스트리밍 API 테스트.
 
-실제 FastAPI 라우터, ChatService, AgentService, ToolDispatcher, PostgreSQL을 쓰고 LLM만 가짜로 바꾼다.
+실제 FastAPI 라우터, reply_service, AgentService, ToolDispatcher, PostgreSQL을 쓰고 LLM만 가짜로 바꾼다.
 - MockGeminiProvider(Chunks): 텍스트 조각을 미리 정한 대로 내보내는 가짜 Provider
 - 진짜 GeminiProvider + FakeGenerateContentStream: google-genai 청크 형식과 오류 매핑까지 확인
 실제 Gemini API는 호출하지 않는다.
@@ -30,7 +30,7 @@ from app.errors import LLMTimeoutError, LLMUnavailableError
 from app.llm.provider import LLMProvider
 from app.llm.types import JsonObject
 from app.main import app
-from app.models import Conversation, ConversationStatus, Message as StoredMessage, MessageRole, Store, SupportTicket
+from app.models import Message as StoredMessage, MessageRole, Store, SupportTicket
 from app.schemas import MessageDeltaEvent, StreamErrorEvent
 from tests.factories import create_store
 from tests.fake_gemini import FakeGenerateContentStream, api_error, provider_with

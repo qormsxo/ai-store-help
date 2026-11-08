@@ -26,7 +26,6 @@ export interface Store {
 export interface Conversation {
   id: string;
   visitor_id: string;
-  status: "active" | "closed";
   created_at: string;
 }
 

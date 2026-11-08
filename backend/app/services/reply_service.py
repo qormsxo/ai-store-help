@@ -1,3 +1,5 @@
+"""질문 한 번에 대한 답변 흐름. 대화와 메시지 기록은 conversation_service가 맡는다."""
+
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -33,7 +35,7 @@ class ReplyCompleted:
     tool_executions: list[ToolExecution]
 
 
-type ChatStreamEvent = TextDelta | ReplyCompleted
+type ReplyStreamEvent = TextDelta | ReplyCompleted
 
 
 async def save_customer_message(
@@ -43,7 +45,7 @@ async def save_customer_message(
 
     답변 생성에 실패한 뒤 고객이 같은 메시지를 다시 보내면 메시지를 새로 저장하지 않고 남아 있는 메시지로 재시도한다.
     """
-    conversation = await conversation_service.get_open_conversation(session, store_id, conversation_id)
+    conversation = await conversation_service.get_conversation(session, store_id, conversation_id)
     try:
         user_message = await conversation_service.get_or_add_user_message(session, conversation, content)
         await session.commit()
@@ -58,7 +60,7 @@ async def stream_reply(
     agent: AgentService,
     stored: StoredCustomerMessage,
     history_limit: int = conversation_service.HISTORY_LIMIT,
-) -> AsyncGenerator[ChatStreamEvent]:
+) -> AsyncGenerator[ReplyStreamEvent]:
     """저장된 고객 메시지에 스트리밍으로 답한다. 답변 텍스트를 TextDelta로 내보내고, 저장하면 ReplyCompleted를 낸다.
 
     답변은 끝까지 생성된 뒤에 Assistant 메시지 하나로 저장한다. 조각마다 저장하지 않는다.

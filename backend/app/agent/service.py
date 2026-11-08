@@ -37,7 +37,7 @@ class AgentReply(BaseModel):
 class AgentService:
     """저장된 고객 메시지 하나에 답한다. LLM이 Tool을 고르고, 이 클래스는 실행과 반복만 맡는다.
 
-    메시지 저장과 커밋은 하지 않는다(ChatService가 한다). Tool이 만든 티켓만 세션에 쌓이고, 호출하는 쪽이
+    메시지 저장과 커밋은 하지 않는다(reply_service가 한다). Tool이 만든 티켓만 세션에 쌓이고, 호출하는 쪽이
     답변 저장과 함께 커밋하거나 실패하면 롤백한다. Tool 호출과 Observation은 이번 요청의 실행 Context(turns)에만
     있고 요청이 끝나면 버린다. DB의 대화 메시지에는 들어가지 않는다.
 

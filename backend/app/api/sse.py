@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from app.errors import AppError
 from app.llm.types import TextDelta
 from app.schemas import CompletedEvent, MessageDeltaEvent, StreamErrorEvent
-from app.services.chat_service import ChatStreamEvent, ReplyCompleted
+from app.services.reply_service import ReplyCompleted, ReplyStreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def format_sse(event: str, data: BaseModel) -> str:
     return f"event: {event}\ndata: {data.model_dump_json()}\n\n"
 
 
-async def stream_chat_events(request: Request, events: AsyncGenerator[ChatStreamEvent]) -> AsyncGenerator[str]:
+async def stream_chat_events(request: Request, events: AsyncGenerator[ReplyStreamEvent]) -> AsyncGenerator[str]:
     """채팅 이벤트를 SSE 문자열로 바꿔 내보낸다.
 
     - 실패는 error 이벤트로 알리고 끝낸다. 이미 200 응답이 시작되어 HTTP 상태 코드를 바꿀 수 없다.
@@ -30,7 +30,7 @@ async def stream_chat_events(request: Request, events: AsyncGenerator[ChatStream
     - 고객 연결이 끊기면 진행 중인 Gemini 호출과 이후 작업을 취소한다. Starlette는 다음 조각을 보내려 할 때에야
       끊김을 알기 때문에, 이벤트를 기다리는 동안에는 직접 확인한다.
     """
-    pending: asyncio.Task[ChatStreamEvent | None] | None = None
+    pending: asyncio.Task[ReplyStreamEvent | None] | None = None
     try:
         while True:
             pending = asyncio.create_task(_next_event(events))
@@ -66,5 +66,5 @@ async def stream_chat_events(request: Request, events: AsyncGenerator[ChatStream
             await events.aclose()
 
 
-async def _next_event(events: AsyncGenerator[ChatStreamEvent]) -> ChatStreamEvent | None:
+async def _next_event(events: AsyncGenerator[ReplyStreamEvent]) -> ReplyStreamEvent | None:
     return await anext(events, None)

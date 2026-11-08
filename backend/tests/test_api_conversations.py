@@ -1,6 +1,6 @@
 """고객 채팅 API 테스트.
 
-실제 FastAPI 라우터, ChatService, AgentService, ToolDispatcher, PostgreSQL을 쓰고 LLM만 가짜로 바꾼다.
+실제 FastAPI 라우터, reply_service, AgentService, ToolDispatcher, PostgreSQL을 쓰고 LLM만 가짜로 바꾼다.
 답변은 SSE 스트림으로만 받는다. 스트림이 시작되기 전의 실패(404, 409, 422, 저장 실패)는 JSON 오류다.
 """
 
@@ -26,7 +26,7 @@ from app.errors import (
 from app.llm.provider import LLMProvider
 from app.llm.types import ModelTurn, UserTurn
 from app.main import app
-from app.models import Conversation, ConversationStatus, Message, MessageRole, Store, SupportTicket
+from app.models import Conversation, Message, MessageRole, Store, SupportTicket
 from app.schemas import MAX_MESSAGE_LENGTH
 from app.services.conversation_service import HISTORY_LIMIT
 from tests.factories import create_conversation, create_message, create_store
@@ -111,8 +111,8 @@ async def test_create_conversation(client: httpx.AsyncClient, session: AsyncSess
 
     assert res.status_code == 201
     body = res.json()
-    assert set(body) == {"id", "visitor_id", "status", "created_at"}
-    assert (body["visitor_id"], body["status"]) == ("visitor-1", "active")
+    assert set(body) == {"id", "visitor_id", "created_at"}
+    assert body["visitor_id"] == "visitor-1"
     saved = await session.get(Conversation, uuid.UUID(body["id"]))
     assert saved is not None
     # 현재 매장과 연결되고, 응답에는 매장 id를 노출하지 않는다.
@@ -144,24 +144,7 @@ async def test_get_conversation(client: httpx.AsyncClient, store: Store) -> None
     res = await client.get(f"/api/conversations/{conversation_id}")
 
     assert res.status_code == 200
-    assert (res.json()["id"], res.json()["visitor_id"], res.json()["status"]) == (
-        conversation_id,
-        "visitor-7",
-        "active",
-    )
-
-
-async def test_closed_conversation_can_still_be_read(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation = await create_conversation(session, store)
-    conversation.status = ConversationStatus.CLOSED
-    await session.flush()
-
-    res = await client.get(f"/api/conversations/{conversation.id}")
-
-    assert res.status_code == 200
-    assert res.json()["status"] == "closed"
+    assert (res.json()["id"], res.json()["visitor_id"]) == (conversation_id, "visitor-7")
 
 
 async def test_list_messages_in_time_order(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
@@ -191,7 +174,7 @@ async def test_list_messages_of_new_conversation_is_empty(client: httpx.AsyncCli
     assert res.json() == []
 
 
-# --- 11. 없는 대화, 다른 매장, 종료된 대화 ----------------------------------------------------
+# --- 11. 없는 대화, 다른 매장 ------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("path", ["", "/messages"])
@@ -239,22 +222,6 @@ async def test_malformed_conversation_id_is_validation_error(client: httpx.Async
     res = await client.get("/api/conversations/not-a-uuid")
 
     assert res.status_code == 422
-
-
-async def test_post_message_to_closed_conversation_is_409(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation = await create_conversation(session, store)
-    conversation.status = ConversationStatus.CLOSED
-    await session.flush()
-    provider = MockGeminiProvider([final_text("never")])
-    use_agent(provider)
-
-    res = await send(client, str(conversation.id), "Hi")
-
-    assert res.status_code == 409
-    assert error_of(res)["code"] == "CONVERSATION_CLOSED"
-    assert provider.requests == []
 
 
 # --- 메시지 입력 검증 ----------------------------------------------------------------------

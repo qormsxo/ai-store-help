@@ -18,8 +18,6 @@ from app.config import get_settings
 from app.db import get_session
 from app.main import app
 from app.models import (
-    Conversation,
-    ConversationStatus,
     KnowledgeEntry,
     Message,
     MessageRole,
@@ -195,7 +193,6 @@ async def test_ticket_detail_includes_customer_conversation(
     assert body["question"] == QUESTION
     assert body["source_message_id"] == str(ticket.source_message_id)
     assert body["conversation"]["id"] == str(ticket.conversation_id)
-    assert body["conversation"]["status"] == "active"
     assert [(m["role"], m["content"]) for m in body["conversation"]["messages"]] == [
         ("user", "Do you allow dogs inside?"),
         ("assistant", "I've forwarded your question to our staff."),
@@ -322,9 +319,12 @@ async def test_next_customer_gets_the_owner_answer_through_the_agent(
     app.dependency_overrides[get_agent_service] = lambda: AgentService(provider)
     conversation = (await client.post("/api/conversations", json={"visitor_id": "visitor-2"})).json()["id"]
 
-    res = await client.post(f"/api/conversations/{conversation}/messages", json={"content": "Can my dog come in?"})
+    res = await client.post(
+        f"/api/conversations/{conversation}/messages/stream", json={"content": "Can my dog come in?"}
+    )
 
-    assert res.status_code == 201
+    assert res.status_code == 200
+    assert "event: completed\n" in res.text
     found = KnowledgeSearchOutput.model_validate(observation(provider.requests[1]).results[0].content)
     assert [(r.question, r.answer) for r in found.results] == [(QUESTION, ANSWER)]
 
@@ -477,22 +477,6 @@ async def test_failure_while_saving_the_message_rolls_back_knowledge_and_ticket(
 
 
 # --- 기타 경계 -------------------------------------------------------------------------------------
-
-
-async def test_reply_reaches_a_closed_conversation(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store)
-    conversation = await session.get(Conversation, ticket.conversation_id)
-    assert conversation is not None
-    conversation.status = ConversationStatus.CLOSED
-    await session.commit()
-
-    res = await reply(client, ticket.id, ANSWER)
-
-    assert res.status_code == 200
-    *_, last = await messages_of(session, ticket.conversation_id)
-    assert last.content == ANSWER
 
 
 async def test_reply_works_when_source_message_is_gone(

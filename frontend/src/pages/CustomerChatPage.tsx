@@ -5,7 +5,6 @@ import {
   ApiError,
   DEMO_VISITORS,
   createConversation,
-  fetchConversation,
   fetchConversations,
   fetchMessages,
   streamMessage,
@@ -32,7 +31,6 @@ export default function CustomerChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [closed, setClosed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const conversationId = useRef<string | null>(null);
@@ -67,13 +65,12 @@ export default function CustomerChatPage() {
       return;
     }
     let ignore = false;
-    Promise.all([fetchConversation(activeId), fetchMessages(activeId)])
-      .then(([conversation, history]) => {
+    fetchMessages(activeId)
+      .then((history) => {
         if (ignore) {
           return;
         }
         setMessages(history);
-        setClosed(conversation.status === "closed");
       })
       .catch((caught: unknown) => {
         if (ignore) {
@@ -120,7 +117,6 @@ export default function CustomerChatPage() {
 
   function chooseVisitor(id: DemoVisitorId) {
     setMessages([]);
-    setClosed(false);
     setError(null);
     setListError(null);
     setDraft("");
@@ -135,7 +131,6 @@ export default function CustomerChatPage() {
       return;
     }
     setMessages([]);
-    setClosed(false);
     setError(null);
     setDraft("");
     setConversations([]);
@@ -166,14 +161,13 @@ export default function CustomerChatPage() {
     setActiveId(null);
     setMessages([]);
     setDraft("");
-    setClosed(false);
     setError(null);
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = draft.trim();
-    if (content === "" || sending || closed || storeState.kind === "missing") {
+    if (content === "" || sending || storeState.kind === "missing") {
       return;
     }
     // 서버는 질문을 먼저 저장하고 답변을 조각으로 보낸다. 첫 조각이 오기 전까지는 화면용 질문만 보여 준다.
@@ -210,9 +204,6 @@ export default function CustomerChatPage() {
         return;
       }
       setError(messageOf(caught));
-      if (caught instanceof ApiError && caught.code === "CONVERSATION_CLOSED") {
-        setClosed(true);
-      }
       // 중간에 실패하면 서버는 답변을 저장하지 않는다. 받던 조각은 버리고, 고객 메시지는 서버 목록으로 맞춘다.
       const id = conversationId.current;
       if (id === null) {
@@ -275,7 +266,7 @@ export default function CustomerChatPage() {
   }
   // 첫 조각이 오기 전에는 마지막 메시지가 고객 질문이다.
   const waitingForAnswer = sending && messages[messages.length - 1]?.role === "user";
-  const inputDisabled = sending || closed || storeState.kind === "missing";
+  const inputDisabled = sending || storeState.kind === "missing";
 
   return (
     <div className="chat-layout">
@@ -304,7 +295,6 @@ export default function CustomerChatPage() {
                   <span className="conversation-preview">{item.last_message ?? "메시지 없음"}</span>
                   <time dateTime={item.created_at}>
                     {formatTime(item.created_at)}
-                    {item.status === "closed" ? " · 종료" : ""}
                   </time>
                 </button>
               </li>
@@ -341,7 +331,6 @@ export default function CustomerChatPage() {
             {error}
           </p>
         )}
-        {closed && <p className="chat-note">종료된 대화입니다. 새 대화를 시작해 주세요.</p>}
         <form className="chat-form" onSubmit={onSubmit}>
           <label className="visually-hidden" htmlFor="chat-input">
             메시지

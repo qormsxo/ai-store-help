@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
-from app.models import ConversationStatus, EscalationReason, MessageRole, TicketStatus
+from app.models import EscalationReason, MessageRole, TicketStatus
 
 
 class HealthResponse(BaseModel):
@@ -51,7 +51,6 @@ class ConversationSummaryResponse(BaseModel):
 
     id: uuid.UUID
     visitor_id: str
-    status: ConversationStatus
     created_at: datetime
     last_message: str | None
 
@@ -63,7 +62,6 @@ class ConversationResponse(BaseModel):
 
     id: uuid.UUID
     visitor_id: str
-    status: ConversationStatus
     created_at: datetime
 
 

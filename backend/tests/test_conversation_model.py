@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError, InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Conversation, ConversationStatus, Message, Store, SupportTicket
+from app.models import Conversation, Message, Store, SupportTicket
 from tests.factories import create_conversation, create_message, create_store, create_ticket
 
 
@@ -27,7 +27,6 @@ async def test_conversation_defaults(session: AsyncSession, store: Store) -> Non
 
     found = await session.get_one(Conversation, created.id)
 
-    assert found.status == ConversationStatus.ACTIVE
     assert found.created_at.utcoffset() == timedelta(0)
     assert found.updated_at.utcoffset() == timedelta(0)
 
@@ -37,7 +36,7 @@ async def test_updated_at_changes_on_update(session: AsyncSession, store: Store)
     created_at_before = conversation.created_at
     updated_at_before = conversation.updated_at
 
-    conversation.status = ConversationStatus.CLOSED
+    conversation.visitor_id = "visitor-updated"
     await session.flush()
 
     assert conversation.updated_at > updated_at_before

@@ -3,8 +3,8 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.errors import ConversationClosedError, ConversationNotFoundError
-from app.models import Conversation, ConversationStatus, Message, MessageRole, Store
+from app.errors import ConversationNotFoundError
+from app.models import Conversation, Message, MessageRole, Store
 from app.repositories import conversation_repository
 
 logger = logging.getLogger(__name__)
@@ -48,13 +48,6 @@ async def get_conversation(session: AsyncSession, store_id: uuid.UUID, conversat
     conversation = await conversation_repository.find_conversation_in_store(session, store_id, conversation_id)
     if conversation is None:
         raise ConversationNotFoundError("대화를 찾을 수 없습니다.")
-    return conversation
-
-
-async def get_open_conversation(session: AsyncSession, store_id: uuid.UUID, conversation_id: uuid.UUID) -> Conversation:
-    conversation = await get_conversation(session, store_id, conversation_id)
-    if conversation.status is ConversationStatus.CLOSED:
-        raise ConversationClosedError("종료된 대화입니다.")
     return conversation
 
 

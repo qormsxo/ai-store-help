@@ -44,7 +44,6 @@ async def test_lists_only_that_visitors_conversations_newest_activity_first(
     body = res.json()
     assert [item["id"] for item in body] == [str(older.id), str(newer.id)]
     assert body[0]["last_message"] == "Emma came back"
-    assert body[0]["status"] == "active"
     assert body[1]["last_message"] == "Second question"
 
 

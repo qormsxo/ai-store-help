@@ -14,7 +14,7 @@ from app.schemas import (
     MessageCreate,
     MessageResponse,
 )
-from app.services import chat_service, conversation_service
+from app.services import conversation_service, reply_service
 
 router = APIRouter(tags=["conversations"])
 
@@ -31,7 +31,6 @@ async def list_conversations(
         ConversationSummaryResponse(
             id=conversation.id,
             visitor_id=conversation.visitor_id,
-            status=conversation.status,
             created_at=conversation.created_at,
             last_message=last_message,
         )
@@ -43,6 +42,7 @@ async def list_conversations(
 async def create_conversation(
     body: ConversationCreate, store: CurrentStoreDep, session: SessionDep
 ) -> ConversationResponse:
+    """이 손님의 새 대화를 만들고 커밋한 뒤 201로 돌려준다."""
     conversation = await conversation_service.create_conversation(session, store, body.visitor_id)
     await session.commit()
     return ConversationResponse.model_validate(conversation)
@@ -52,6 +52,7 @@ async def create_conversation(
 async def get_conversation(
     conversation_id: uuid.UUID, store: CurrentStoreDep, session: SessionDep
 ) -> ConversationResponse:
+    """대화 하나를 조회한다. 이 매장 것이 아니면 없는 대화와 같이 404다."""
     conversation = await conversation_service.get_conversation(session, store.id, conversation_id)
     return ConversationResponse.model_validate(conversation)
 
@@ -60,6 +61,7 @@ async def get_conversation(
 async def list_messages(
     conversation_id: uuid.UUID, store: CurrentStoreDep, session: SessionDep
 ) -> list[MessageResponse]:
+    """그 대화의 고객·AI 메시지를 시간순으로 돌려준다. 화면이 이전 기록을 불러올 때 쓴다."""
     conversation = await conversation_service.get_conversation(session, store.id, conversation_id)
     messages = await conversation_service.list_messages(session, conversation)
     return [MessageResponse.model_validate(message) for message in messages]
@@ -76,11 +78,11 @@ async def stream_message(
 ) -> StreamingResponse:
     """같은 질문에 답을 SSE로 스트리밍한다. 이벤트: message_delta(텍스트 조각), completed(저장된 message_id), error.
 
-    대화가 없거나 닫혔거나 요청이 잘못된 경우는 스트림을 시작하기 전에 일반 오류 응답(404, 409, 422)으로 끝난다.
+    대화가 없거나 요청이 잘못된 경우는 스트림을 시작하기 전에 일반 오류 응답(404, 422)으로 끝난다.
     고객 메시지는 스트림을 시작하기 전에 저장하고 커밋한다.
     """
-    stored = await chat_service.save_customer_message(session, store.id, conversation_id, body.content)
-    events = chat_service.stream_reply(session, agent, stored)
+    stored = await reply_service.save_customer_message(session, store.id, conversation_id, body.content)
+    events = reply_service.stream_reply(session, agent, stored)
     return StreamingResponse(
         sse.stream_chat_events(request, events),
         media_type="text/event-stream",

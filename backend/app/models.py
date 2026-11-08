@@ -38,11 +38,6 @@ class Base(DeclarativeBase):
     type_annotation_map = {datetime: DateTime(timezone=True)}
 
 
-class ConversationStatus(enum.StrEnum):
-    ACTIVE = "active"
-    CLOSED = "closed"
-
-
 class MessageRole(enum.StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -143,11 +138,6 @@ class Conversation(Base):
     store_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stores.id", ondelete="RESTRICT"))
     # 로그인이 없으므로 브라우저가 만든 익명 방문자 식별자를 그대로 저장한다.
     visitor_id: Mapped[str] = mapped_column(String(64))
-    status: Mapped[ConversationStatus] = mapped_column(
-        _pg_enum(ConversationStatus, "conversation_status"),
-        default=ConversationStatus.ACTIVE,
-        server_default=ConversationStatus.ACTIVE.value,
-    )
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, server_default=func.now())
 
