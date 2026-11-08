@@ -47,13 +47,21 @@ class MockGeminiProvider:
     """responses를 요청마다 하나씩 소비한다.
 
     ModelTurn은 텍스트를 조각 하나로 내보내고, 여러 조각이 필요하면 Chunks를 쓴다.
+    생성자는 Sequence를 받는다. list[ModelTurn]을 list[합집합]에 넣으면 원소를 더 넣을 수 있어서
+    타입 검사가 거절하기 때문이다. 받은 값은 소비할 수 있게 리스트로 복사한다.
     """
 
-    responses: list[ModelTurn | Exception | Chunks]
+    responses: list[ModelTurn | Exception | Chunks] = field(init=False)
     requests: list[RecordedRequest] = field(default_factory=list)
     closed: bool = False
     # 스트림이 끝까지 가지 못하고 닫히거나 취소된 횟수(연결 종료 테스트용)
     interrupted_streams: int = 0
+
+    def __init__(self, responses: Sequence[ModelTurn | Exception | Chunks]) -> None:
+        self.responses = list(responses)
+        self.requests = []
+        self.closed = False
+        self.interrupted_streams = 0
 
     async def generate_stream(
         self, *, system_instruction: str, turns: Sequence[Turn], tools: Sequence[ToolDefinition]

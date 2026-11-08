@@ -1,6 +1,6 @@
 """데모 매장 seed 스크립트. 실행: python -m app.seed
 
-만드는 것: 가상의 미국 매장 1건 + 요일별 영업시간 7건.
+만드는 것: 가상의 한국 매장 1건 + 요일별 영업시간 7건.
 만들지 않는 것: KnowledgeEntry, Conversation, Message, SupportTicket (지식 DB는 빈 상태로 시작한다).
 
 여러 번 실행해도 안전하다. 같은 slug의 매장이 이미 있으면 아무것도 바꾸지 않는다.
@@ -20,15 +20,13 @@ from app.models import BusinessHour, Store
 logger = logging.getLogger(__name__)
 
 # 전화번호는 가상 번호 대역(555-01xx), 이메일과 웹사이트는 예약 도메인(.example)을 써서 실존 업체와 겹치지 않게 한다.
-DEMO_STORE_NAME = "Oak & Pine Coffee Roasters"
-DEMO_STORE_DESCRIPTION = (
-    "Neighborhood coffee shop and bakery serving small-batch roasted coffee, fresh pastries, and light lunches."
-)
-DEMO_STORE_ADDRESS = "1427 Oak Street, Portland, OR 97205"
-DEMO_STORE_PHONE = "+1 (503) 555-0142"
+DEMO_STORE_NAME = "오크앤파인 커피"
+DEMO_STORE_DESCRIPTION = "동네 커피집입니다. 소량으로 볶은 원두, 갓 구운 빵, 간단한 점심을 팝니다."
+DEMO_STORE_ADDRESS = "서울특별시 마포구 연남로 12"
+DEMO_STORE_PHONE = "02-555-0142"
 DEMO_STORE_EMAIL = "hello@oakpine.example"
 DEMO_STORE_WEBSITE = "https://www.oakpine.example"
-DEMO_STORE_TIMEZONE = "America/Los_Angeles"
+DEMO_STORE_TIMEZONE = "Asia/Seoul"
 
 # (요일 0=월요일, 오픈, 마감). 시간이 None이면 휴무.
 DEMO_BUSINESS_HOURS: tuple[tuple[int, time | None, time | None], ...] = (

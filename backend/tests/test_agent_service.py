@@ -161,13 +161,13 @@ async def test_search_knowledge_tool_returns_matching_entry(
     session: AsyncSession, store: Store, conversation: Conversation
 ) -> None:
     entry = await create_knowledge(
-        session, store, "Are dogs allowed inside?", "Only service dogs are allowed inside. Pets are welcome on the patio."
+        session, store, "매장 안에 강아지 출입이 되나요?", "안내견만 매장 안으로 들어올 수 있습니다."
     )
     provider = MockGeminiProvider(
         [
             function_call("get_store_profile"),
-            function_call("search_knowledge", query="dogs inside"),
-            final_text("Only service dogs are allowed inside."),
+            function_call("search_knowledge", query="강아지 출입"),
+            final_text("안내견만 매장 안으로 들어올 수 있습니다."),
         ]
     )
 
@@ -178,8 +178,8 @@ async def test_search_knowledge_tool_returns_matching_entry(
     output = KnowledgeSearchOutput.model_validate(result.content)
     assert len(output.results) == 1
     assert output.results[0].source_id == entry.id
-    assert output.results[0].question == "Are dogs allowed inside?"
-    assert output.results[0].answer == "Only service dogs are allowed inside. Pets are welcome on the patio."
+    assert output.results[0].question == "매장 안에 강아지 출입이 되나요?"
+    assert output.results[0].answer == "안내견만 매장 안으로 들어올 수 있습니다."
     assert output.results[0].relevance_score > 0
 
 
@@ -187,20 +187,20 @@ async def test_scenario_b_answers_from_knowledge(
     session: AsyncSession, store: Store, conversation: Conversation
 ) -> None:
     await create_knowledge(
-        session, store, "Are dogs allowed inside?", "Only service dogs are allowed inside. Pets are welcome on the patio."
+        session, store, "매장 안에 강아지 출입이 되나요?", "안내견만 매장 안으로 들어올 수 있습니다."
     )
     provider = MockGeminiProvider(
         [
             function_call("get_store_profile"),
-            function_call("search_knowledge", query="dogs inside"),
-            final_text("Only service dogs are allowed inside, but pets are welcome on the patio."),
+            function_call("search_knowledge", query="강아지 출입"),
+            final_text("안내견만 매장 안으로 들어올 수 있습니다."),
         ]
     )
 
-    reply = await ask(AgentService(provider), session, store, conversation, "Do you allow dogs inside?")
+    reply = await ask(AgentService(provider), session, store, conversation, "강아지 데려가도 되나요?")
 
     assert [e.name for e in reply.tool_executions] == ["get_store_profile", "search_knowledge"]
-    assert reply.assistant_message.content == "Only service dogs are allowed inside, but pets are welcome on the patio."
+    assert reply.assistant_message.content == "안내견만 매장 안으로 들어올 수 있습니다."
     assert await ticket_count(session) == 0
 
 
@@ -213,10 +213,10 @@ async def test_scenario_c_runs_three_tools_in_order_and_creates_ticket(
     provider = MockGeminiProvider(
         [
             function_call("get_store_profile"),
-            function_call("search_knowledge", query="refund after 60 days"),
+            function_call("search_knowledge", query="환불 60일"),
             function_call(
                 "create_support_ticket",
-                question="Can I get a refund after 60 days?",
+                question="60일이 지난 뒤에도 환불받을 수 있나요?",
                 escalation_reason="no_knowledge",
             ),
             final_text("I've forwarded your question to our staff. They will get back to you."),
@@ -256,7 +256,7 @@ async def test_scenario_c_runs_three_tools_in_order_and_creates_ticket(
         conversation.id,
         user_message.id,
     )
-    assert ticket.question == "Can I get a refund after 60 days?"
+    assert ticket.question == "60일이 지난 뒤에도 환불받을 수 있나요?"
     assert ticket.escalation_reason is EscalationReason.NO_KNOWLEDGE
     assert user_message.content == "Can I get a refund after 60 days?"
     assert assistant_message.content == reply.assistant_message.content
@@ -267,8 +267,8 @@ async def test_context_is_kept_across_tool_rounds(
 ) -> None:
     scripted = [
         function_call("get_store_profile"),
-        function_call("search_knowledge", query="refund after 60 days"),
-        function_call("create_support_ticket", question="Refund after 60 days?", escalation_reason="no_knowledge"),
+        function_call("search_knowledge", query="환불 60일"),
+        function_call("create_support_ticket", question="60일 이후에도 환불이 되나요?", escalation_reason="no_knowledge"),
         final_text("Forwarded to our staff."),
     ]
     provider = MockGeminiProvider(list(scripted))
@@ -298,11 +298,11 @@ async def test_context_is_kept_across_tool_rounds(
 async def test_function_call_arguments_reach_the_service(
     session: AsyncSession, store: Store, conversation: Conversation
 ) -> None:
-    await create_knowledge(session, store, "Is parking available?", "Free parking behind the shop.")
+    await create_knowledge(session, store, "주차 가능한가요?", "가게 뒤에 무료 주차가 됩니다.")
     provider = MockGeminiProvider(
         [
-            function_call("search_knowledge", query="  parking  "),
-            function_call("create_support_ticket", question="  Is there EV charging?  ", escalation_reason="insufficient_knowledge"),
+            function_call("search_knowledge", query="  주차  "),
+            function_call("create_support_ticket", question="  전기차 충전이 되나요?  ", escalation_reason="insufficient_knowledge"),
             final_text("Forwarded."),
         ]
     )
@@ -311,10 +311,10 @@ async def test_function_call_arguments_reach_the_service(
 
     # query 앞뒤 공백은 Pydantic 검증에서 정리된 뒤 검색에 쓰였다.
     search = KnowledgeSearchOutput.model_validate(observation(provider.requests[1]).results[0].content)
-    assert [r.question for r in search.results] == ["Is parking available?"]
+    assert [r.question for r in search.results] == ["주차 가능한가요?"]
     ticket = await session.scalar(select(SupportTicket))
     assert ticket is not None
-    assert ticket.question == "Is there EV charging?"
+    assert ticket.question == "전기차 충전이 되나요?"
     assert ticket.escalation_reason is EscalationReason.INSUFFICIENT_KNOWLEDGE
 
 
@@ -327,7 +327,7 @@ async def test_ticket_question_fits_the_knowledge_question_column() -> None:
     """티켓의 질문은 사장이 답하면 KnowledgeEntry.question(String(500))이 된다. 더 길면 그 티켓은 해결할 수 없다."""
     longest = 500
     for length, valid in ((longest, True), (longest + 1, False)):
-        arguments = {"question": "q" * length, "escalation_reason": "no_knowledge"}
+        arguments = {"question": "가" * length, "escalation_reason": "no_knowledge"}
         if valid:
             CreateSupportTicketArguments.model_validate(arguments)
         else:
@@ -359,7 +359,13 @@ async def test_unregistered_tool_is_blocked(session: AsyncSession, store: Store,
 async def test_invalid_arguments_return_error_observation(
     session: AsyncSession, store: Store, conversation: Conversation, name: str, arguments: dict[str, str | int]
 ) -> None:
-    provider = MockGeminiProvider([function_call(name, **arguments), final_text("Could you tell me more?")])
+    # call_id는 문자만 받는다. 인자 dict를 통째로 풀면 123 같은 값이 call_id로도 들어갈 수 있다.
+    payload: JsonObject = {}
+    for key, value in arguments.items():
+        payload[key] = value
+    provider = MockGeminiProvider(
+        [ModelTurn(tool_calls=[ToolCall(id=f"call-{name}", name=name, arguments=payload)]), final_text("Could you tell me more?")]
+    )
 
     reply = await ask(AgentService(provider), session, store, conversation, "Refund?")
 
@@ -404,12 +410,12 @@ async def test_llm_cannot_pass_internal_ids(
 async def test_retry_after_invalid_arguments_succeeds(
     session: AsyncSession, store: Store, conversation: Conversation
 ) -> None:
-    await create_knowledge(session, store, "Is parking available?", "Free parking behind the shop.")
+    await create_knowledge(session, store, "주차가 가능한가요?", "가게 뒤에 무료 주차가 됩니다.")
     provider = MockGeminiProvider(
         [
             function_call("search_knowledge", call_id="bad"),
-            function_call("search_knowledge", call_id="good", query="parking"),
-            final_text("Free parking behind the shop."),
+            function_call("search_knowledge", call_id="good", query="주차"),
+            final_text("가게 뒤에 무료 주차가 됩니다."),
         ]
     )
 
@@ -428,8 +434,8 @@ async def test_tool_call_limit_stops_the_loop(session: AsyncSession, store: Stor
     provider = MockGeminiProvider(
         [
             function_call("get_store_profile", call_id="1"),
-            function_call("search_knowledge", call_id="2", query="parking"),
-            function_call("search_knowledge", call_id="3", query="parking lot"),
+            function_call("search_knowledge", call_id="2", query="주차"),
+            function_call("search_knowledge", call_id="3", query="주차장"),
             final_text("never reached"),
         ]
     )
@@ -451,8 +457,8 @@ async def test_parallel_calls_count_toward_the_limit(
             ModelTurn(
                 tool_calls=[
                     ToolCall(id="1", name="get_store_profile", arguments={}),
-                    ToolCall(id="2", name="search_knowledge", arguments={"query": "parking"}),
-                    ToolCall(id="3", name="search_knowledge", arguments={"query": "garage"}),
+                    ToolCall(id="2", name="search_knowledge", arguments={"query": "주차"}),
+                    ToolCall(id="3", name="search_knowledge", arguments={"query": "주차장"}),
                 ]
             )
         ]
@@ -538,7 +544,7 @@ async def test_previous_messages_are_sent_as_context(
 async def test_ticket_is_created_once_per_customer_message(
     session: AsyncSession, store: Store, conversation: Conversation
 ) -> None:
-    ticket_call = {"question": "Refund after 60 days?", "escalation_reason": "no_knowledge"}
+    ticket_call = {"question": "60일 이후에도 환불이 되나요?", "escalation_reason": "no_knowledge"}
     provider = MockGeminiProvider(
         [
             function_call("create_support_ticket", call_id="1", **ticket_call),

@@ -40,7 +40,7 @@ from tests.fake_gemini import (
 )
 from tests.mock_llm import MockGeminiProvider, final_text, function_call, turn_kinds
 
-REFUND_QUESTION = "Can I get a refund after 60 days?"
+REFUND_QUESTION = "60일이 지난 뒤에도 환불받을 수 있나요?"
 TICKET_CALL = {"question": REFUND_QUESTION, "escalation_reason": "no_knowledge"}
 
 
@@ -394,7 +394,7 @@ async def test_multi_tool_request_creates_ticket_for_this_message(
     provider = MockGeminiProvider(
         [
             function_call("get_store_profile"),
-            function_call("search_knowledge", query="refund after 60 days"),
+            function_call("search_knowledge", query="환불 60일"),
             function_call("create_support_ticket", **TICKET_CALL),
             final_text("I've forwarded your question to our staff."),
         ]
@@ -437,7 +437,7 @@ async def test_real_gemini_provider_chain_links_function_calls_and_responses(
     fake = as_single_chunk_streams(
         [
             function_call_response("get_store_profile", "call-1"),
-            function_call_response("search_knowledge", "call-2", query="refund 60 days"),
+            function_call_response("search_knowledge", "call-2", query="환불 60일"),
             function_call_response("create_support_ticket", "call-3", **TICKET_CALL),
             text_response("I've forwarded your question to our staff."),
         ]

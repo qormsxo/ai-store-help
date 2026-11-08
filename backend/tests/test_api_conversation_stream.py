@@ -34,7 +34,7 @@ from app.schemas import MessageDeltaEvent, StreamErrorEvent
 from tests.factories import create_store
 from tests.mock_llm import Chunks, MockGeminiProvider, final_text, function_call
 
-REFUND_QUESTION = "Can I get a refund after 60 days?"
+REFUND_QUESTION = "60일이 지난 뒤에도 환불받을 수 있나요?"
 TICKET_CALL = {"question": REFUND_QUESTION, "escalation_reason": "no_knowledge"}
 _JSON_OBJECT = TypeAdapter(JsonObject)
 
@@ -353,7 +353,7 @@ async def test_tool_calling_flow_is_kept_and_only_the_final_answer_is_streamed(
     provider = MockGeminiProvider(
         [
             function_call("get_store_profile"),
-            function_call("search_knowledge", query="refund 60 days"),
+            function_call("search_knowledge", query="환불 60일"),
             function_call("create_support_ticket", **TICKET_CALL),
             Chunks(["I've forwarded ", "your question ", "to our staff."]),
         ]

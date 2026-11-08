@@ -6,9 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import KnowledgeEntry
 
-# 영어 사전(stemming, 불용어)을 쓴다. dogs와 dog처럼 어형이 다른 표현도 같은 단어로 본다.
-_ENGLISH = literal_column("'english'::regconfig")
-_WORD = re.compile(r"[0-9A-Za-z]+")
+# PostgreSQL 기본 설정에는 한글 형태소 사전이 없다. 영어 사전은 한글을 검색어에서 빼므로 simple을 쓴다.
+# simple은 띄어 쓴 단어를 그대로 둔다. 강아지와 강아지는 같은 단어로 보지 않는다.
+_TEXT_SEARCH = literal_column("'simple'::regconfig")
+_WORD = re.compile(r"[0-9A-Za-z가-힣]+")
 
 
 def _any_keyword_query(query: str) -> str:
@@ -52,10 +53,10 @@ async def search_active_entries(
     if not keywords:
         return []
     # setweight의 가중치는 PostgreSQL "char" 타입이라 바인드 파라미터(VARCHAR) 대신 상수 리터럴로 쓴다.
-    document = func.setweight(func.to_tsvector(_ENGLISH, KnowledgeEntry.question), literal_column("'A'")).op(
+    document = func.setweight(func.to_tsvector(_TEXT_SEARCH, KnowledgeEntry.question), literal_column("'A'")).op(
         "||"
-    )(func.setweight(func.to_tsvector(_ENGLISH, KnowledgeEntry.answer), literal_column("'B'")))
-    tsquery = func.websearch_to_tsquery(_ENGLISH, keywords)
+    )(func.setweight(func.to_tsvector(_TEXT_SEARCH, KnowledgeEntry.answer), literal_column("'B'")))
+    tsquery = func.websearch_to_tsquery(_TEXT_SEARCH, keywords)
     rank = func.ts_rank_cd(document, tsquery, type_=Float)
 
     statement = (

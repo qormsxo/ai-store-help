@@ -36,13 +36,12 @@ async def test_partial_keywords_still_match(session: AsyncSession, store: Store,
     assert [r.source_id for r in results] == [entry.id]
 
 
-async def test_similar_wording_matches_by_word_form(session: AsyncSession, store: Store) -> None:
+async def test_korean_keywords_match(session: AsyncSession, store: Store) -> None:
     entry = await create_knowledge(
-        session, store, "Are dogs allowed on the patio?", "Well-behaved dogs are welcome on the patio."
+        session, store, "매장 안에 강아지 출입이 되나요?", "네, 강아지와 함께 오셔도 됩니다."
     )
 
-    # dogs/dog, allowed/allow처럼 어형이 달라도 같은 단어로 찾는다.
-    results = await knowledge_search_service.search_knowledge(session, store.id, "dog allow patio")
+    results = await knowledge_search_service.search_knowledge(session, store.id, "강아지 출입")
 
     assert [r.source_id for r in results] == [entry.id]
 
@@ -74,13 +73,13 @@ async def test_unrelated_question_returns_empty_list(session: AsyncSession, stor
     assert results == []
 
 
-@pytest.mark.parametrize("query", ["", "   ", "what is the"])
+@pytest.mark.parametrize("query", ["", "   ", "???"])
 async def test_query_without_searchable_words_returns_empty_list(
     session: AsyncSession, store: Store, query: str
 ) -> None:
     await create_knowledge(session, store, "Is there parking?", "Yes, behind the shop.")
 
-    # 빈 문자열, 공백, 불용어(what is the)만 있는 질문은 아무것도 찾지 않는다.
+    # 빈 문자열, 공백, 글자가 없는 검색어는 아무것도 찾지 않는다.
     results = await knowledge_search_service.search_knowledge(session, store.id, query)
 
     assert results == []

@@ -38,9 +38,9 @@ async def provider() -> AsyncIterator[LLMProvider]:
 
 @pytest.fixture
 async def store(session: AsyncSession) -> Store:
-    store = await create_store(session, slug="oak-pine-live", name="Oak & Pine Coffee Roasters")
-    store.address = "1427 Oak Street, Portland, OR 97205"
-    store.phone = "+1 (503) 555-0142"
+    store = await create_store(session, slug="oak-pine-live", name="오크앤파인 커피")
+    store.address = "서울특별시 마포구 연남로 12"
+    store.phone = "02-555-0142"
     for day in range(6):
         await create_business_hour(session, store, day)
     await create_business_hour(session, store, 6, None, None)
@@ -63,20 +63,20 @@ async def ask(session: AsyncSession, conversation: Conversation, provider: LLMPr
 async def test_live_scenario_a_store_address(
     session: AsyncSession, store: Store, conversation: Conversation, provider: LLMProvider
 ) -> None:
-    reply = await ask(session, conversation, provider, "What is your store address?")
+    reply = await ask(session, conversation, provider, "매장 주소가 어디인가요?")
 
     assert [e.name for e in reply.tool_executions] == ["get_store_profile"]
-    assert "1427 Oak" in reply.content
+    assert "연남로" in reply.content
 
 
 async def test_live_scenario_b_knowledge(
     session: AsyncSession, store: Store, conversation: Conversation, provider: LLMProvider
 ) -> None:
     await create_knowledge(
-        session, store, "Are dogs allowed inside?", "Only service dogs are allowed inside. Pets are welcome on the patio."
+        session, store, "매장 안에 강아지 출입이 되나요?", "안내견만 매장 안으로 들어올 수 있습니다."
     )
 
-    reply = await ask(session, conversation, provider, "Do you allow dogs inside?")
+    reply = await ask(session, conversation, provider, "강아지 데려가도 되나요?")
 
     assert [e.name for e in reply.tool_executions][:2] == ["get_store_profile", "search_knowledge"]
     assert "create_support_ticket" not in [e.name for e in reply.tool_executions]
@@ -85,7 +85,7 @@ async def test_live_scenario_b_knowledge(
 async def test_live_scenario_c_ticket(
     session: AsyncSession, store: Store, conversation: Conversation, provider: LLMProvider
 ) -> None:
-    reply = await ask(session, conversation, provider, "Can I get a refund after 60 days?")
+    reply = await ask(session, conversation, provider, "60일이 지난 뒤에도 환불받을 수 있나요?")
 
     assert [e.name for e in reply.tool_executions] == [
         "get_store_profile",

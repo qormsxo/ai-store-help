@@ -31,8 +31,8 @@ from app.services import knowledge_search_service
 from tests.factories import create_conversation, create_message, create_store, create_ticket
 from tests.mock_llm import MockGeminiProvider, final_text, function_call, observation
 
-QUESTION = "Are dogs allowed inside?"
-ANSWER = "Only service dogs are allowed inside. Pets are welcome on the patio."
+QUESTION = "매장 안에 강아지 출입이 되나요?"
+ANSWER = "안내견만 매장 안으로 들어올 수 있습니다. 다른 반려동물은 테라스에서 가능합니다."
 
 
 @pytest.fixture
@@ -297,7 +297,7 @@ async def test_next_customer_gets_the_owner_answer_through_the_agent(
     await reply(client, ticket.id, ANSWER)
     provider = MockGeminiProvider(
         [
-            function_call("search_knowledge", query="dogs inside"),
+            function_call("search_knowledge", query="강아지 출입"),
             final_text("Only service dogs are allowed inside, but pets are welcome on the patio."),
         ]
     )
@@ -382,7 +382,7 @@ async def test_same_question_twice_supersedes_the_older_knowledge(
     assert (old.is_active, new.is_active) == (False, True)
     assert old.source_ticket_id == first.id
     assert new.source_ticket_id == second.id
-    found = await knowledge_search_service.search_knowledge(session, store.id, "dogs inside")
+    found = await knowledge_search_service.search_knowledge(session, store.id, "강아지 출입")
     assert [r.answer for r in found] == [ANSWER]
     assert (await fresh_ticket(session, second.id)).status is TicketStatus.RESOLVED
 

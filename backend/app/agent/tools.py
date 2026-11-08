@@ -46,7 +46,7 @@ class SearchKnowledgeArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] = Field(
-        description='2-5 English keywords for what the customer wants to know, e.g. "dogs inside".'
+        description='2-5 keywords for what the customer wants to know. Knowledge is in Korean, e.g. "강아지 입장".'
     )
 
 # 티켓 생성 메소드 매개변수 클래스
@@ -57,6 +57,7 @@ class CreateSupportTicketArguments(BaseModel):
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] = Field(
         description="The customer's question rewritten as a clear, standalone question for the store owner."
     )
+
     # EscalationReason의 값과 같아야 한다(테스트가 확인한다). enum을 쓰면 JSON Schema에 $ref가 생겨서 Literal로 둔다.
     escalation_reason: Literal["no_knowledge", "insufficient_knowledge"] = Field(
         description=(
