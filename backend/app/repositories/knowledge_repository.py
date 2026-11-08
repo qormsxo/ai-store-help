@@ -54,4 +54,5 @@ async def search_active_entries(
         .limit(limit)
     )
     result = await session.execute(statement)
-    return [(entry, score) for entry, score in result.all()]
+    # type_=Float는 점수를 Decimal | float로 추론한다. 이 함수가 돌려주는 점수는 float다.
+    return [(entry, float(score)) for entry, score in result.all()]

@@ -22,11 +22,14 @@ type ToolStatus = Literal["ok", "unknown_tool", "invalid_arguments", "failed"]
 
 @dataclass(frozen=True)
 class AgentContext:
-    """Backend가 채우는 실행 문맥. Tool 인자에는 없는 값이라 LLM이 바꿀 수 없다."""
+    """도구가 읽을 서버 값. 세션으로 DB를 보고, 대화에서 매장을 꺼낸다. 메시지 id는 티켓을 그 고객 글에 묶을 때만 쓴다.
+
+    모델 인자로 받으면 모델이 바꿀 수 있으므로 여기 둔다.
+    """
 
     session: AsyncSession
     conversation: Conversation
-    # 이번 요청의 고객 메시지. 티켓을 이 메시지에 연결한다.
+    # 이번 요청의 고객 메시지. 같은 id로 티켓이 있으면 새로 만들지 않는다.
     source_message_id: uuid.UUID
 
     @property
@@ -38,7 +41,7 @@ class AgentContext:
 class NoArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-
+# 지식 검색 메소드 매개변수 클래스
 class SearchKnowledgeArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,7 +49,7 @@ class SearchKnowledgeArguments(BaseModel):
         description='2-5 English keywords for what the customer wants to know, e.g. "dogs inside".'
     )
 
-
+# 티켓 생성 메소드 매개변수 클래스
 class CreateSupportTicketArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -62,11 +65,11 @@ class CreateSupportTicketArguments(BaseModel):
         )
     )
 
-
+# 지식 검색 메소드 결과 클래스
 class KnowledgeSearchOutput(BaseModel):
     results: list[KnowledgeSearchItem]
 
-
+# 티켓 생성 메소드 결과 클래스
 class TicketCreationOutput(BaseModel):
     ticket_id: uuid.UUID
     status: TicketStatus
@@ -75,6 +78,12 @@ class TicketCreationOutput(BaseModel):
 
 
 class AgentTool(Protocol):
+    """디스패처가 아는 도구 규격. Tool은 이 클래스를 상속하지 않는다.
+
+    name, definition(), run()이 있으면 이 타입으로 친다. 자바 인터페이스와 같고, 실행 코드는 Tool에만 있다.
+    """
+
+    # tool.name()이 아니라 tool.name으로 읽는다.
     @property
     def name(self) -> str: ...
 
@@ -85,11 +94,17 @@ class AgentTool(Protocol):
 
 @dataclass(frozen=True)
 class Tool[A: BaseModel]:
-    """이름, 설명, 인자 모델, 실행 함수를 묶는다. 인자 모델이 Function Declaration의 스키마가 된다."""
+    """도구 하나의 등록 정보. 제네릭 A의 상한은 BaseModel이다. 자바의 Tool<A extends BaseModel>과 같다.
+
+    dataclass가 필드 4개를 그대로 넣는 생성자를 만든다. frozen이라 만든 뒤 필드를 바꾸지 못한다.
+    A는 이 도구의 매개변수 클래스다. 검색 도구면 SearchKnowledgeArguments다.
+    """
 
     name: str
     description: str
+    # 매개변수 클래스 자체다. SearchKnowledgeArguments() 인스턴스가 아니다.
     arguments_model: type[A]
+    # 두 번째 매개변수도 같은 A여야 한다. 검색 스키마에 매장 조회 함수를 넣으면 타입 검사가 틀린다.
     handler: Callable[[AgentContext, A], Awaitable[BaseModel]]
 
     def definition(self) -> ToolDefinition:
@@ -99,6 +114,7 @@ class Tool[A: BaseModel]:
         )
 
     async def run(self, context: AgentContext, arguments: JsonObject) -> BaseModel:
+        # dict를 A로 검사한 뒤 handler를 호출한다. 서비스 호출은 handler 안에 있다.
         return await self.handler(context, self.arguments_model.model_validate(arguments))
 
 
@@ -128,6 +144,7 @@ async def _reject_not_inquiry(_: AgentContext, __: NoArguments) -> BaseModel:
     raise NotStoreInquiryError("매장에 대한 문의만 답변할 수 있습니다.")
 
 
+# 원소 개수는 고정하지 않는다. 각 원소는 AgentTool 규격이면 되고, 실제 값은 Tool 객체다.
 DEFAULT_TOOLS: tuple[AgentTool, ...] = (
     Tool(
         name="get_store_profile",
@@ -177,11 +194,14 @@ class ToolDispatcher:
     """
 
     def __init__(self, tools: Sequence[AgentTool] = DEFAULT_TOOLS) -> None:
+        # 키는 이름 문자열, 값은 Tool 객체 전체다. 설명과 handler는 값 안에 들어 있다.
         self._tools = {tool.name: tool for tool in tools}
 
+    # 딕셔너리 값마다 definition() 결과만 리스트로 만든다. Gemini에 보낼 설명서다.
     def definitions(self) -> list[ToolDefinition]:
         return [tool.definition() for tool in self._tools.values()]
 
+    # llm이 요청한 도구 이름과 인자를 받아 실행하고, 결과를 Observation으로 만든다.
     async def dispatch(self, context: AgentContext, call: ToolCall) -> ToolResult:
         started = time.perf_counter()
         content, status = await self._execute(context, call)
@@ -198,9 +218,12 @@ class ToolDispatcher:
 
     async def _execute(self, context: AgentContext, call: ToolCall) -> tuple[JsonObject, ToolStatus]:
         tool = self._tools.get(call.name)
+        # 도구 이름이 없으면 오류 반환
         if tool is None:
             message = f"Tool '{call.name}' does not exist. Available tools: {', '.join(self._tools)}."
             return _error("UNKNOWN_TOOL", message), "unknown_tool"
+
+        # 도구 실행
         try:
             # Tool마다 savepoint를 둔다. DB 오류가 나도 이 Tool의 변경만 취소되고 세션은 계속 쓸 수 있다.
             async with context.session.begin_nested():
@@ -217,6 +240,7 @@ class ToolDispatcher:
             # SQL 파라미터에 고객 문장이 들어 있을 수 있어 예외 메시지 대신 종류만 남긴다.
             logger.error("Tool %s failed: %s", call.name, type(exc).__name__)
             return _error("TOOL_FAILED", "The tool failed due to a temporary internal error."), "failed"
+
         return output.model_dump(mode="json"), "ok"
 
 
