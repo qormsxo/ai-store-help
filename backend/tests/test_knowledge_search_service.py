@@ -1,9 +1,25 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Store
 from app.services import knowledge_search_service
 from tests.factories import create_knowledge, create_store
+
+
+async def test_expired_knowledge_is_not_searched(session: AsyncSession, store: Store) -> None:
+    await create_knowledge(
+        session,
+        store,
+        "지금 자리 있나요?",
+        "네, 창가 두 자리 있습니다.",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    results = await knowledge_search_service.search_knowledge(session, store.id, "자리")
+
+    assert results == []
 
 
 async def test_empty_knowledge_returns_empty_list(session: AsyncSession, store: Store) -> None:

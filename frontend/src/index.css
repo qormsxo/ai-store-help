@@ -679,6 +679,29 @@ button:disabled {
   font-weight: 600;
 }
 
+.owner-lifetime {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.owner-lifetime legend {
+  width: 100%;
+  margin-bottom: 2px;
+  padding: 0;
+  font-weight: 600;
+}
+
+.owner-lifetime label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+
 .owner-form .chat-note {
   padding: 0;
 }

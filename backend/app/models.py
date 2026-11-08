@@ -54,6 +54,14 @@ class TicketStatus(enum.StrEnum):
     RESOLVED = "resolved"
 
 
+class KnowledgeLifetime(enum.StrEnum):
+    """사장이 답한 뒤 그 답을 지식으로 어떻게 둘지. 티켓을 만들 때 모델이 정한다."""
+
+    NONE = "none"
+    PERMANENT = "permanent"
+    UNTIL_END_OF_DAY = "until_end_of_day"
+
+
 def _pg_enum(enum_class: type[enum.StrEnum], name: str) -> Enum:
     """멤버 이름(ACTIVE)이 아니라 값(active)을 DB enum 레이블로 저장한다."""
     return Enum(enum_class, name=name, values_callable=lambda members: [m.value for m in members])
@@ -194,6 +202,12 @@ class SupportTicket(Base):
     source_message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
     question: Mapped[str] = mapped_column(Text)
     escalation_reason: Mapped[EscalationReason] = mapped_column(_pg_enum(EscalationReason, "escalation_reason"))
+    # 답변 전에는 none이다. 사장이 답을 등록할 때 고른 값으로 바뀌고, 그 값으로 지식을 남긴다.
+    knowledge_lifetime: Mapped[KnowledgeLifetime] = mapped_column(
+        _pg_enum(KnowledgeLifetime, "knowledge_lifetime"),
+        default=KnowledgeLifetime.NONE,
+        server_default=KnowledgeLifetime.NONE.value,
+    )
     owner_answer: Mapped[str | None] = mapped_column(Text)
     status: Mapped[TicketStatus] = mapped_column(
         _pg_enum(TicketStatus, "ticket_status"),
@@ -233,6 +247,8 @@ class KnowledgeEntry(Base):
         ForeignKey("support_tickets.id", ondelete="SET NULL"), unique=True
     )
     is_active: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
+    # NULL이면 기한 없이 쓴다. 값이 있으면 그 시각부터 검색과 재사용에서 빠진다.
+    expires_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, server_default=func.now())
 

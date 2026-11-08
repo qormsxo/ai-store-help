@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 from alembic import command
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -33,7 +34,23 @@ def migrated_database_url() -> str:
     config = alembic_config(url)
     command.downgrade(config, "base")
     command.upgrade(config, "head")
+    # 0001이 데모 매장을 넣는다. 테스트는 빈 테이블에서 자기 데이터를 만든다.
+    asyncio.run(_clear_seeded_rows(url.render_as_string(hide_password=False)))
     return url.render_as_string(hide_password=False)
+
+
+async def _clear_seeded_rows(database_url: str) -> None:
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "TRUNCATE knowledge_entries, support_tickets, messages, conversations, "
+                    "business_hours, stores RESTART IDENTITY CASCADE"
+                )
+            )
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture

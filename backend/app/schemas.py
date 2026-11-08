@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
-from app.models import EscalationReason, MessageRole, TicketStatus
+from app.models import EscalationReason, KnowledgeLifetime, MessageRole, TicketStatus
 
 
 class HealthResponse(BaseModel):
@@ -110,6 +110,7 @@ class TicketResponse(BaseModel):
     # AI가 고객 메시지를 사장에게 보내기 좋게 다시 쓴 질문. 지식으로 저장될 때 질문이 된다.
     question: str
     escalation_reason: EscalationReason
+    knowledge_lifetime: KnowledgeLifetime
     conversation_id: uuid.UUID
     owner_answer: str | None
     created_at: datetime
@@ -128,11 +129,14 @@ class TicketDetailResponse(TicketResponse):
 
 class OwnerReplyCreate(BaseModel):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ANSWER_LENGTH)]
+    # 사장이 답변 등록 때 고른다. 티켓에 미리 적힌 값은 쓰지 않는다.
+    knowledge_lifetime: KnowledgeLifetime
 
 
 class OwnerReplyResponse(BaseModel):
     ticket: TicketResponse
-    knowledge_entry_id: uuid.UUID
+    # 티켓이 지식을 남기지 않으면 null이다.
+    knowledge_entry_id: uuid.UUID | None
     # 같은 질문의 지식이 이미 있어서 이번 답변으로 대체(비활성화)된 지식. 없으면 null.
     superseded_knowledge_id: uuid.UUID | None
     # 고객 대화에 추가된 답변 메시지

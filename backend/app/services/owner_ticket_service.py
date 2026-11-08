@@ -8,7 +8,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ServiceUnavailableError, TicketAlreadyResolvedError, TicketNotFoundError
-from app.models import Conversation, KnowledgeEntry, Message, MessageRole, SupportTicket, TicketStatus, utcnow
+from app.models import (
+    Conversation,
+    KnowledgeEntry,
+    KnowledgeLifetime,
+    Message,
+    MessageRole,
+    SupportTicket,
+    TicketStatus,
+    utcnow,
+)
 from app.repositories import support_ticket_repository
 from app.services import conversation_service, knowledge_service
 
@@ -29,7 +38,7 @@ class ReplyResult:
     """답변이 커밋된 뒤의 결과. 라우터가 OwnerReplyResponse로 바꾼다."""
 
     ticket: SupportTicket
-    knowledge_entry: KnowledgeEntry
+    knowledge_entry: KnowledgeEntry | None
     superseded_knowledge_id: uuid.UUID | None
     conversation_message: Message
 
@@ -56,12 +65,16 @@ async def get_ticket_detail(session: AsyncSession, store_id: uuid.UUID, ticket_i
 
 
 async def reply_to_ticket(
-    session: AsyncSession, store_id: uuid.UUID, ticket_id: uuid.UUID, answer: str
+    session: AsyncSession,
+    store_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    answer: str,
+    lifetime: KnowledgeLifetime,
 ) -> ReplyResult:
     """사장 답변을 처리한다. 이 함수가 커밋한다.
 
-    아래 세 가지는 하나의 트랜잭션이라서 전부 반영되거나 전부 반영되지 않는다.
-    1. 질문과 답변을 지식으로 저장
+    아래는 하나의 트랜잭션이라서 전부 반영되거나 전부 반영되지 않는다.
+    1. 사장이 고른 lifetime대로 지식을 저장하거나 건너뛰고, 그 선택을 티켓에 남긴다
     2. 티켓을 resolved로 변경 (답변과 해결 시각 기록)
     3. 원래 고객 대화에 답변을 AI Assistant 메시지로 추가
     티켓 행을 먼저 잠그므로 같은 티켓에 답변이 동시에 들어와도 하나만 처리되고 나머지는 409다.
@@ -75,9 +88,8 @@ async def reply_to_ticket(
         if ticket.status is TicketStatus.RESOLVED:
             raise TicketAlreadyResolvedError("이미 답변이 등록된 문의입니다.")
 
-        # 지식 저장
-        saved = await knowledge_service.save_owner_answer(session, ticket, answer)
-        # 티켓 업데이트
+        ticket.knowledge_lifetime = lifetime
+        saved = await knowledge_service.save_owner_answer(session, ticket, answer, lifetime)
         ticket.owner_answer = answer
         ticket.status = TicketStatus.RESOLVED
         ticket.resolved_at = utcnow()
@@ -96,10 +108,14 @@ async def reply_to_ticket(
         await session.rollback()
         raise
 
-    logger.info("Ticket %s resolved: knowledge=%s", ticket.id, saved.entry.id)
+    logger.info(
+        "Ticket %s resolved: knowledge=%s",
+        ticket.id,
+        saved.entry.id if saved is not None else None,
+    )
     return ReplyResult(
         ticket=ticket,
-        knowledge_entry=saved.entry,
-        superseded_knowledge_id=saved.superseded_entry_id,
+        knowledge_entry=saved.entry if saved is not None else None,
+        superseded_knowledge_id=saved.superseded_entry_id if saved is not None else None,
         conversation_message=message,
     )

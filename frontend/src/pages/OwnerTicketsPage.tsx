@@ -6,6 +6,8 @@ import {
   fetchTicket,
   fetchTickets,
   replyToTicket,
+  type KnowledgeLifetime,
+  type OwnerReplyResult,
   type Ticket,
   type TicketDetail,
   type TicketStatus,
@@ -31,6 +33,32 @@ const REASON_LABEL: Record<Ticket["escalation_reason"], string> = {
   insufficient_knowledge: "있는 지식으로 답할 수 없음",
 };
 
+const LIFETIME_CHOICES: { id: KnowledgeLifetime; label: string }[] = [
+  { id: "none", label: "이 손님에게만" },
+  { id: "permanent", label: "계속 저장" },
+  { id: "until_end_of_day", label: "오늘 자정까지" },
+];
+
+const LIFETIME_NOTE: Record<KnowledgeLifetime, string> = {
+  none: "이 답은 이 손님에게만 전달됩니다. 지식으로는 저장되지 않습니다.",
+  permanent: "이 답은 고객 대화에 전달되고, 계속 쓰는 지식으로 저장됩니다.",
+  until_end_of_day: "이 답은 고객 대화에 전달되고, 오늘 자정까지만 지식으로 씁니다.",
+};
+
+function savedNotice(result: OwnerReplyResult): string {
+  if (result.knowledge_entry_id === null) {
+    return "답변을 등록했습니다. 이 손님에게만 전달하고 지식으로는 남기지 않았습니다.";
+  }
+  if (result.ticket.knowledge_lifetime === "until_end_of_day") {
+    return result.superseded_knowledge_id === null
+      ? "답변을 등록했습니다. 오늘 매장 시간 끝까지 지식으로 씁니다."
+      : "답변을 등록했습니다. 같은 질문의 이전 지식을 오늘까지만 쓰는 답으로 바꿨습니다.";
+  }
+  return result.superseded_knowledge_id === null
+    ? "답변을 등록했습니다. 고객 대화에 전달되고 지식으로 저장되었습니다."
+    : "답변을 등록했습니다. 같은 질문의 이전 지식을 이 답변으로 바꿨습니다.";
+}
+
 export default function OwnerTicketsPage() {
   const { storeSlug = "" } = useParams();
   const [filter, setFilter] = useState<Filter>("open");
@@ -40,6 +68,7 @@ export default function OwnerTicketsPage() {
   const [listError, setListError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [lifetime, setLifetime] = useState<KnowledgeLifetime>("none");
   const [sending, setSending] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -94,6 +123,7 @@ export default function OwnerTicketsPage() {
   function selectTicket(ticketId: string) {
     setSelectedId(ticketId);
     setDraft("");
+    setLifetime("none");
     setReplyError(null);
   }
 
@@ -107,13 +137,10 @@ export default function OwnerTicketsPage() {
     setReplyError(null);
     setNotice(null);
     try {
-      const result = await replyToTicket(storeSlug, selectedId, answer);
+      const result = await replyToTicket(storeSlug, selectedId, answer, lifetime);
       setDraft("");
-      setNotice(
-        result.superseded_knowledge_id === null
-          ? "답변을 등록했습니다. 고객 대화에 전달되고 지식으로 저장되었습니다."
-          : "답변을 등록했습니다. 같은 질문의 이전 지식을 이 답변으로 바꿨습니다.",
-      );
+      setLifetime("none");
+      setNotice(savedNotice(result));
       // 미처리 목록에서는 방금 답한 문의가 빠지므로, 그 문의를 답변 완료에서 그대로 보여 준다.
       setFilter("resolved");
       setTickets(null);
@@ -217,6 +244,7 @@ export default function OwnerTicketsPage() {
                 <div className="owner-answer">
                   <h3>등록된 답변</h3>
                   <p>{showing.owner_answer}</p>
+                  <p className="chat-note">{LIFETIME_NOTE[showing.knowledge_lifetime]}</p>
                   {showing.resolved_at !== null && (
                     <time dateTime={showing.resolved_at}>{formatDateTime(showing.resolved_at)} 등록</time>
                   )}
@@ -224,10 +252,24 @@ export default function OwnerTicketsPage() {
               )}
               {showing.status === "open" && (
                 <form className="owner-form" onSubmit={onSubmit}>
+                  <fieldset className="owner-lifetime">
+                    <legend>이 답의 저장</legend>
+                    {LIFETIME_CHOICES.map((choice) => (
+                      <label key={choice.id}>
+                        <input
+                          type="radio"
+                          name="knowledge-lifetime"
+                          value={choice.id}
+                          checked={lifetime === choice.id}
+                          disabled={sending}
+                          onChange={() => setLifetime(choice.id)}
+                        />
+                        {choice.label}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <p className="chat-note">{LIFETIME_NOTE[lifetime]}</p>
                   <label htmlFor="owner-answer">답변</label>
-                  <p className="chat-note">
-                    고객 대화에 AI 답변으로 전달되고, 이후 비슷한 질문에 쓰이는 지식으로 저장됩니다.
-                  </p>
                   <textarea
                     id="owner-answer"
                     value={draft}

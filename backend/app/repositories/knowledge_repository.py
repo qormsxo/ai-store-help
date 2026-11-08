@@ -28,17 +28,26 @@ def _normalized(question: SQLColumnExpression[str]) -> SQLColumnExpression[str]:
     return func.lower(func.regexp_replace(func.btrim(question), r"\s+", " ", "g"))
 
 
+def _still_current() -> SQLColumnExpression[bool]:
+    """기한이 없거나 아직 기한 전인 지식. 지난 지식은 다음 손님에게 다시 쓰지 않는다."""
+    return or_(KnowledgeEntry.expires_at.is_(None), KnowledgeEntry.expires_at > func.now())
+
+
 async def find_active_entry_by_question(
-    session: AsyncSession, store_id: uuid.UUID, question: str
+    session: AsyncSession, store_id: uuid.UUID, question: str, *, reusable_only: bool = True
 ) -> KnowledgeEntry | None:
-    """같은 매장에서 같은 질문(공백, 대소문자 무시)으로 활성 상태인 지식. 인덱스 때문에 최대 한 건이다."""
-    return await session.scalar(
-        select(KnowledgeEntry).where(
-            KnowledgeEntry.store_id == store_id,
-            KnowledgeEntry.is_active.is_(True),
-            _normalized(KnowledgeEntry.question) == _normalized(literal(question, String)),
-        )
-    )
+    """같은 매장에서 같은 질문(공백, 대소문자 무시)으로 활성 상태인 지식. 인덱스 때문에 최대 한 건이다.
+
+    reusable_only가 켜져 있으면 만료된 행은 뺀다. 새 답으로 그 자리를 비울 때만 끈다.
+    """
+    filters: list[SQLColumnExpression[bool]] = [
+        KnowledgeEntry.store_id == store_id,
+        KnowledgeEntry.is_active.is_(True),
+        _normalized(KnowledgeEntry.question) == _normalized(literal(question, String)),
+    ]
+    if reusable_only:
+        filters.append(_still_current())
+    return await session.scalar(select(KnowledgeEntry).where(*filters))
 
 
 async def search_active_entries(
@@ -67,6 +76,7 @@ async def search_active_entries(
         .where(
             KnowledgeEntry.store_id == store_id,
             KnowledgeEntry.is_active.is_(True),
+            _still_current(),
             or_(*hits),
         )
         # 점수가 같으면 최근에 갱신된 지식을 먼저 둔다. id는 순서를 고정하기 위한 마지막 기준이다.

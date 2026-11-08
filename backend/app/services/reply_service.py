@@ -74,7 +74,8 @@ async def stream_reply(
     try:
         reply: AgentReply | None = None
         # 검색은 모델이 고른 단어로 한다. 단어가 저장된 문장과 어긋나면 결과가 비고, 모델은 지식이 없다고 보고 티켓을 만든다.
-        # 고객 문장이 활성 지식의 질문과 같으면(대소문자, 연속 공백 무시) 그 답을 그대로 쓰고 모델은 부르지 않는다.
+        # 고객 문장이 아직 쓸 수 있는 지식의 질문과 같으면(대소문자, 연속 공백 무시) 그 답을 그대로 쓰고 모델은 부르지 않는다.
+        # 만료된 지식은 여기서 걸리지 않는다.
         known = await knowledge_repository.find_active_entry_by_question(
             session, stored.conversation.store_id, stored.message.content
         )

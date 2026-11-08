@@ -6,6 +6,7 @@
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -293,6 +294,30 @@ async def test_send_message_saves_user_message_and_assistant_reply(
     ]
     listed = await client.get(f"/api/conversations/{conversation_id}/messages")
     assert [m["id"] for m in listed.json()] == [str(m.id) for m in saved]
+
+
+async def test_expired_exact_question_is_not_reused(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    await create_knowledge(
+        session,
+        store,
+        question="Are dogs allowed in the store?",
+        answer="Yes, dogs are welcome.",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    conversation_id = await start_conversation(client, "visitor-2")
+    provider = MockGeminiProvider([final_text("I need to check that.")])
+    use_agent(provider)
+
+    res = await send(client, conversation_id, "Are dogs allowed in the store?")
+
+    assert_completed(res)
+    assert provider.requests != []
+    assert [m.content for m in await stored_messages(session, conversation_id)] == [
+        "Are dogs allowed in the store?",
+        "I need to check that.",
+    ]
 
 
 async def test_same_question_as_stored_knowledge_is_answered_without_a_new_ticket(

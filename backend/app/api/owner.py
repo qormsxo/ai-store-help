@@ -54,12 +54,14 @@ async def reply_to_ticket(
 ) -> OwnerReplyResponse:
     """POST /api/owner/tickets/{ticket_id}/reply. 사장 답변을 저장하고 그 결과를 돌려준다.
 
-    지식으로 저장하고, 티켓을 resolved로 바꾸고, 고객 대화에 assistant 메시지를 추가한다. 이 세 가지는 한 트랜잭션이다.
+    사장이 고른 저장 방식대로 지식을 남기거나 남기지 않는다. 티켓은 resolved가 되고, 고객 대화에 assistant 메시지가 추가된다.
     """
-    result = await owner_ticket_service.reply_to_ticket(session, store.id, ticket_id, body.answer)
+    result = await owner_ticket_service.reply_to_ticket(
+        session, store.id, ticket_id, body.answer, body.knowledge_lifetime
+    )
     return OwnerReplyResponse(
         ticket=TicketResponse.model_validate(result.ticket),
-        knowledge_entry_id=result.knowledge_entry.id,
+        knowledge_entry_id=result.knowledge_entry.id if result.knowledge_entry is not None else None,
         superseded_knowledge_id=result.superseded_knowledge_id,
         conversation_message=MessageResponse.model_validate(result.conversation_message),
     )

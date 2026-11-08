@@ -30,6 +30,7 @@ from app.llm.types import JsonObject, ModelTurn, ToolCall, UserTurn
 from app.models import (
     Conversation,
     EscalationReason,
+    KnowledgeLifetime,
     Message,
     MessageRole,
     Store,
@@ -258,6 +259,7 @@ async def test_scenario_c_runs_three_tools_in_order_and_creates_ticket(
     )
     assert ticket.question == "60일이 지난 뒤에도 환불받을 수 있나요?"
     assert ticket.escalation_reason is EscalationReason.NO_KNOWLEDGE
+    assert ticket.knowledge_lifetime is KnowledgeLifetime.NONE
     assert user_message.content == "Can I get a refund after 60 days?"
     assert assistant_message.content == reply.assistant_message.content
 
@@ -268,7 +270,11 @@ async def test_context_is_kept_across_tool_rounds(
     scripted = [
         function_call("get_store_profile"),
         function_call("search_knowledge", query="환불 60일"),
-        function_call("create_support_ticket", question="60일 이후에도 환불이 되나요?", escalation_reason="no_knowledge"),
+        function_call(
+            "create_support_ticket",
+            question="60일 이후에도 환불이 되나요?",
+            escalation_reason="no_knowledge",
+        ),
         final_text("Forwarded to our staff."),
     ]
     provider = MockGeminiProvider(list(scripted))
@@ -302,7 +308,11 @@ async def test_function_call_arguments_reach_the_service(
     provider = MockGeminiProvider(
         [
             function_call("search_knowledge", query="  주차  "),
-            function_call("create_support_ticket", question="  전기차 충전이 되나요?  ", escalation_reason="insufficient_knowledge"),
+            function_call(
+                "create_support_ticket",
+                question="  전기차 충전이 되나요?  ",
+                escalation_reason="insufficient_knowledge",
+            ),
             final_text("Forwarded."),
         ]
     )
@@ -316,6 +326,7 @@ async def test_function_call_arguments_reach_the_service(
     assert ticket is not None
     assert ticket.question == "전기차 충전이 되나요?"
     assert ticket.escalation_reason is EscalationReason.INSUFFICIENT_KNOWLEDGE
+    assert ticket.knowledge_lifetime is KnowledgeLifetime.NONE
 
 
 async def test_escalation_reason_values_match_enum() -> None:

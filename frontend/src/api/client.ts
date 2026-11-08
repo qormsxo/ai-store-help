@@ -189,11 +189,14 @@ function stringField(value: unknown, key: string): string | null {
 
 export type TicketStatus = "open" | "resolved";
 
+export type KnowledgeLifetime = "none" | "permanent" | "until_end_of_day";
+
 export interface Ticket {
   id: string;
   status: TicketStatus;
   question: string;
   escalation_reason: "no_knowledge" | "insufficient_knowledge";
+  knowledge_lifetime: KnowledgeLifetime;
   conversation_id: string;
   owner_answer: string | null;
   created_at: string;
@@ -214,7 +217,7 @@ export interface TicketDetail extends Ticket {
 
 export interface OwnerReplyResult {
   ticket: Ticket;
-  knowledge_entry_id: string;
+  knowledge_entry_id: string | null;
   superseded_knowledge_id: string | null;
   conversation_message: TicketMessage;
 }
@@ -228,10 +231,15 @@ export async function fetchTicket(slug: string, ticketId: string): Promise<Ticke
   return request<TicketDetail>(storePath(slug, `/owner/tickets/${ticketId}`));
 }
 
-export async function replyToTicket(slug: string, ticketId: string, answer: string): Promise<OwnerReplyResult> {
+export async function replyToTicket(
+  slug: string,
+  ticketId: string,
+  answer: string,
+  knowledgeLifetime: KnowledgeLifetime,
+): Promise<OwnerReplyResult> {
   return request<OwnerReplyResult>(storePath(slug, `/owner/tickets/${ticketId}/reply`), {
     method: "POST",
-    body: JSON.stringify({ answer }),
+    body: JSON.stringify({ answer, knowledge_lifetime: knowledgeLifetime }),
   });
 }
 

@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import datetime, time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +7,7 @@ from app.models import (
     Conversation,
     EscalationReason,
     KnowledgeEntry,
+    KnowledgeLifetime,
     Message,
     MessageRole,
     Store,
@@ -63,6 +64,7 @@ async def create_ticket(
     conversation: Conversation,
     source_message: Message | None = None,
     question: str = "영업시간 문의",
+    knowledge_lifetime: KnowledgeLifetime = KnowledgeLifetime.NONE,
 ) -> SupportTicket:
     # 티켓의 매장은 항상 대화의 매장과 같다. 서비스도 이렇게 부모에서 복사해서 채운다.
     ticket = SupportTicket(
@@ -71,6 +73,7 @@ async def create_ticket(
         source_message_id=source_message.id if source_message else None,
         question=question,
         escalation_reason=EscalationReason.NO_KNOWLEDGE,
+        knowledge_lifetime=knowledge_lifetime,
     )
     session.add(ticket)
     await session.flush()
@@ -84,6 +87,7 @@ async def create_knowledge(
     answer: str = "매일 10시부터 22시까지입니다.",
     ticket: SupportTicket | None = None,
     is_active: bool = True,
+    expires_at: datetime | None = None,
 ) -> KnowledgeEntry:
     entry = KnowledgeEntry(
         store_id=store.id,
@@ -91,6 +95,7 @@ async def create_knowledge(
         answer=answer,
         source_ticket_id=ticket.id if ticket else None,
         is_active=is_active,
+        expires_at=expires_at,
     )
     session.add(entry)
     await session.flush()

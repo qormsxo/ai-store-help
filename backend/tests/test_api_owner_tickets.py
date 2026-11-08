@@ -5,6 +5,8 @@
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -19,6 +21,7 @@ from app.db import get_session
 from app.main import app
 from app.models import (
     KnowledgeEntry,
+    KnowledgeLifetime,
     Message,
     MessageRole,
     Store,
@@ -28,7 +31,7 @@ from app.models import (
 )
 from app.schemas import MAX_ANSWER_LENGTH
 from app.services import knowledge_search_service
-from tests.factories import create_conversation, create_message, create_store, create_ticket
+from tests.factories import create_conversation, create_knowledge, create_message, create_store, create_ticket
 from tests.mock_llm import MockGeminiProvider, final_text, function_call, observation
 
 QUESTION = "매장 안에 강아지 출입이 되나요?"
@@ -58,6 +61,7 @@ async def open_ticket(
     customer_text: str = "Do you allow dogs inside?",
     *,
     with_source_message: bool = True,
+    knowledge_lifetime: KnowledgeLifetime = KnowledgeLifetime.NONE,
 ) -> OpenTicket:
     """AI가 문의를 사장에게 넘긴 뒤의 상태: 고객 질문, AI의 안내 답변, 미처리 티켓.
 
@@ -66,13 +70,27 @@ async def open_ticket(
     conversation = await create_conversation(session, store)
     message = await create_message(session, conversation, customer_text, MessageRole.USER)
     await create_message(session, conversation, "I've forwarded your question to our staff.", MessageRole.ASSISTANT)
-    ticket = await create_ticket(session, conversation, message if with_source_message else None, question)
+    ticket = await create_ticket(
+        session,
+        conversation,
+        message if with_source_message else None,
+        question,
+        knowledge_lifetime=knowledge_lifetime,
+    )
     await session.commit()
     return OpenTicket(id=ticket.id, conversation_id=conversation.id, source_message_id=ticket.source_message_id)
 
 
-async def reply(client: httpx.AsyncClient, ticket_id: uuid.UUID, answer: str) -> httpx.Response:
-    return await client.post(f"/api/owner/tickets/{ticket_id}/reply", json={"answer": answer})
+async def reply(
+    client: httpx.AsyncClient,
+    ticket_id: uuid.UUID,
+    answer: str,
+    lifetime: str = "permanent",
+) -> httpx.Response:
+    return await client.post(
+        f"/api/owner/tickets/{ticket_id}/reply",
+        json={"answer": answer, "knowledge_lifetime": lifetime},
+    )
 
 
 async def count(session: AsyncSession, model: type[KnowledgeEntry] | type[Message] | type[SupportTicket]) -> int:
@@ -122,6 +140,7 @@ async def test_list_tickets_oldest_first(client: httpx.AsyncClient, session: Asy
         "status",
         "question",
         "escalation_reason",
+        "knowledge_lifetime",
         "conversation_id",
         "owner_answer",
         "created_at",
@@ -351,6 +370,74 @@ async def test_answer_at_max_length_is_accepted(client: httpx.AsyncClient, sessi
     res = await reply(client, ticket.id, "a" * MAX_ANSWER_LENGTH)
 
     assert res.status_code == 200
+
+
+async def test_reply_marked_none_reaches_the_customer_without_knowledge(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    existing = await create_knowledge(session, store, question=QUESTION, answer="기존 답")
+    await session.commit()
+    ticket = await open_ticket(session, store, knowledge_lifetime=KnowledgeLifetime.PERMANENT)
+
+    res = await reply(client, ticket.id, ANSWER, "none")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["knowledge_entry_id"] is None
+    assert body["superseded_knowledge_id"] is None
+    assert body["ticket"]["status"] == "resolved"
+    assert body["ticket"]["knowledge_lifetime"] == "none"
+    assert body["conversation_message"]["content"] == ANSWER
+    kept = await fresh_knowledge(session, existing.id)
+    assert kept.is_active is True
+    assert kept.answer == "기존 답"
+    assert await count(session, KnowledgeEntry) == 1
+
+
+async def test_reply_until_end_of_day_expires_at_the_next_local_midnight(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    ticket = await open_ticket(session, store)
+
+    res = await reply(client, ticket.id, ANSWER, "until_end_of_day")
+
+    assert res.status_code == 200
+    assert res.json()["ticket"]["knowledge_lifetime"] == "until_end_of_day"
+    knowledge = await fresh_knowledge(session, res.json()["knowledge_entry_id"])
+    assert knowledge.expires_at is not None
+    local = knowledge.expires_at.astimezone(ZoneInfo(store.timezone))
+    now_local = datetime.now(ZoneInfo(store.timezone))
+    assert (local.hour, local.minute, local.second, local.microsecond) == (0, 0, 0, 0)
+    assert local.date() == now_local.date() + timedelta(days=1)
+
+
+async def test_reply_replaces_expired_knowledge_of_the_same_question(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    expired = await create_knowledge(
+        session, store, question=QUESTION, answer="어제 답", expires_at=datetime.now(UTC) - timedelta(minutes=1)
+    )
+    await session.commit()
+    ticket = await open_ticket(session, store, knowledge_lifetime=KnowledgeLifetime.PERMANENT)
+
+    res = await reply(client, ticket.id, ANSWER)
+
+    assert res.status_code == 200
+    assert res.json()["superseded_knowledge_id"] == str(expired.id)
+    old = await fresh_knowledge(session, expired.id)
+    new = await fresh_knowledge(session, res.json()["knowledge_entry_id"])
+    assert old.is_active is False
+    assert new.is_active is True
+    assert new.expires_at is None
+
+
+async def test_missing_lifetime_is_rejected(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
+    ticket = await open_ticket(session, store)
+
+    res = await client.post(f"/api/owner/tickets/{ticket.id}/reply", json={"answer": ANSWER})
+
+    assert res.status_code == 422
+    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
 
 
 async def test_missing_answer_field_is_rejected(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:

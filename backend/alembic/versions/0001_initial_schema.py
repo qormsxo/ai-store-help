@@ -2,6 +2,7 @@
 
 현재 모델과 같은 스키마를 한 번에 만든다.
 매장, 영업시간, 대화, 메시지, 문의 티켓, 지식.
+데모 매장 두 곳과 매장마다 다른 주차 지식도 여기서 넣는다.
 
 Revision ID: 0001
 Revises:
@@ -104,6 +105,12 @@ def upgrade() -> None:
             sa.Enum("no_knowledge", "insufficient_knowledge", name="escalation_reason"),
             nullable=False,
         ),
+        sa.Column(
+            "knowledge_lifetime",
+            sa.Enum("none", "permanent", "until_end_of_day", name="knowledge_lifetime"),
+            server_default="none",
+            nullable=False,
+        ),
         sa.Column("owner_answer", sa.Text(), nullable=True),
         sa.Column(
             "status",
@@ -152,6 +159,7 @@ def upgrade() -> None:
         sa.Column("answer", sa.Text(), nullable=False),
         sa.Column("source_ticket_id", sa.Uuid(), nullable=True),
         sa.Column("is_active", sa.Boolean(), server_default=sa.text("true"), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(
@@ -173,6 +181,83 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("is_active"),
     )
+    _seed_demo_stores()
+
+
+def _seed_demo_stores() -> None:
+    """데모 매장 두 곳, 영업시간, 서로 다른 주차 지식. python -m app.seed와 같은 내용이다."""
+    op.execute(
+        """
+        INSERT INTO stores (slug, name, description, address, phone, email, website, timezone)
+        VALUES
+          (
+            'oak-pine-demo',
+            '오크앤파인 커피',
+            '동네 커피집입니다. 소량으로 볶은 원두, 갓 구운 빵, 간단한 점심을 팝니다.',
+            '서울특별시 마포구 연남로 12',
+            '02-555-0142',
+            'hello@oakpine.example',
+            'https://www.oakpine.example',
+            'Asia/Seoul'
+          ),
+          (
+            'seongsu-flower',
+            '성수 꽃집',
+            '성수동 골목의 꽃집입니다. 다발, 화분, 간단한 식물을 팝니다.',
+            '서울특별시 성동구 연무장길 45',
+            '02-555-0198',
+            'hello@seongsu-flower.example',
+            'https://www.seongsu-flower.example',
+            'Asia/Seoul'
+          )
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO business_hours (store_id, day_of_week, open_time, close_time)
+        SELECT stores.id, hours.day, hours.opens, hours.closes
+        FROM stores
+        CROSS JOIN (
+          VALUES
+            (0, TIME '07:00', TIME '18:00'),
+            (1, TIME '07:00', TIME '18:00'),
+            (2, TIME '07:00', TIME '18:00'),
+            (3, TIME '07:00', TIME '18:00'),
+            (4, TIME '07:00', TIME '18:00'),
+            (5, TIME '08:00', TIME '17:00'),
+            (6, NULL::time, NULL::time)
+        ) AS hours(day, opens, closes)
+        WHERE stores.slug = 'oak-pine-demo'
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO business_hours (store_id, day_of_week, open_time, close_time)
+        SELECT stores.id, hours.day, hours.opens, hours.closes
+        FROM stores
+        CROSS JOIN (
+          VALUES
+            (0, NULL::time, NULL::time),
+            (1, TIME '11:00', TIME '20:00'),
+            (2, TIME '11:00', TIME '20:00'),
+            (3, TIME '11:00', TIME '20:00'),
+            (4, TIME '11:00', TIME '20:00'),
+            (5, TIME '11:00', TIME '20:00'),
+            (6, TIME '11:00', TIME '20:00')
+        ) AS hours(day, opens, closes)
+        WHERE stores.slug = 'seongsu-flower'
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO knowledge_entries (store_id, question, answer)
+        SELECT id, '주차할 곳이 있나요?', '매장 전용 주차장은 없습니다. 연남로 공영주차장을 이용해 주세요.'
+        FROM stores WHERE slug = 'oak-pine-demo'
+        UNION ALL
+        SELECT id, '주차할 곳이 있나요?', '매장 뒤편에 무료 주차 2대가 있습니다.'
+        FROM stores WHERE slug = 'seongsu-flower'
+        """
+    )
 
 
 def downgrade() -> None:
@@ -193,5 +278,5 @@ def downgrade() -> None:
     op.drop_table("business_hours")
     op.drop_table("stores")
     # drop_table은 PostgreSQL enum 타입을 지우지 않는다. 남기면 다시 upgrade할 때 "type already exists"로 실패한다.
-    for enum_name in ("ticket_status", "escalation_reason", "message_role"):
+    for enum_name in ("knowledge_lifetime", "ticket_status", "escalation_reason", "message_role"):
         op.execute(f"DROP TYPE {enum_name}")
