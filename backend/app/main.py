@@ -14,7 +14,7 @@ settings = get_settings()
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
 
-
+# 정상적인 시작과 종료를 위해 lifespan 에 선언한다.
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:

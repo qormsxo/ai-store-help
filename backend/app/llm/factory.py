@@ -16,6 +16,7 @@ def create_llm_provider(settings: Settings) -> LLMProvider:
     return create_gemini_provider(settings)
 
 
+# @lru_cache 로 첫호출만 실제로 만들고 이후 호출은 그 객체를 다시 리턴한다.
 @lru_cache
 def get_llm_provider() -> LLMProvider:
     """앱 전체에서 클라이언트 하나를 공유한다. 설정이 없으면 LLMNotConfiguredError(캐시되지 않음)."""

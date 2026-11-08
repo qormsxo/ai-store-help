@@ -110,6 +110,7 @@ async def stream_reply(
     """
     conversation_id = stored.conversation.id
     committed = False
+    completed: ReplyCompleted | None = None
     try:
         history = await conversation_service.get_recent_dialogue(
             session, stored.conversation, stored.message, history_limit
@@ -130,7 +131,8 @@ async def stream_reply(
                 session, stored.conversation, MessageRole.ASSISTANT, reply.content
             )
             await session.commit()
-        committed = True
+            committed = True
+            completed = ReplyCompleted(assistant_message, reply.tool_executions)
     except SQLAlchemyError as exc:
         raise _storage_error("assistant reply", conversation_id, exc) from exc
     finally:
@@ -138,7 +140,8 @@ async def stream_reply(
             # 오류와 취소 모두 여기로 온다. 취소 중에도 롤백은 끝까지 해서 연결을 깨끗하게 돌려준다.
             with anyio.CancelScope(shield=True):
                 await session.rollback()
-    yield ReplyCompleted(assistant_message, reply.tool_executions)
+    if completed is not None:
+        yield completed
 
 
 def _storage_error(what: str, conversation_id: uuid.UUID, exc: SQLAlchemyError) -> MessageStorageError:
