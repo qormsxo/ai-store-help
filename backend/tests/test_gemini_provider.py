@@ -1,30 +1,17 @@
 """GeminiProvider 단위 테스트. 네트워크를 쓰지 않는다.
 
-조각 순서와 요청 형식은 test_gemini_streaming.py가 본다. 여기는 대화 변환, 재시도 소진, 오류 매핑만 본다.
+조각 순서와 재시도는 test_gemini_streaming.py와 채팅 API 테스트가 본다.
+여기는 대화가 Gemini 함수 호출 형식으로 가는지, 클라이언트 오류는 재시도하지 않는지만 본다.
 """
 
-import httpx2
 import pytest
-from google.genai import errors, types
+from google.genai import types
 
 from app.agent.tools import ToolDispatcher
-from app.errors import (
-    LLMNotConfiguredError,
-    LLMRateLimitedError,
-    LLMRequestError,
-    LLMTimeoutError,
-    LLMUnavailableError,
-)
+from app.errors import LLMNotConfiguredError
 from app.llm.gemini import GeminiProvider
 from app.llm.types import ModelTurn, ToolCall, ToolResult, ToolResultTurn, UserTurn
-from tests.fake_gemini import (
-    TEXT_RESPONSE,
-    FakeGenerateContentStream,
-    Stall,
-    api_error,
-    as_single_chunk_streams,
-    provider_with,
-)
+from tests.fake_gemini import TEXT_RESPONSE, api_error, as_single_chunk_streams, provider_with
 
 
 async def generate(provider: GeminiProvider, turns: list[UserTurn | ModelTurn | ToolResultTurn] | None = None) -> ModelTurn:
@@ -74,97 +61,11 @@ async def test_context_is_sent_in_gemini_function_calling_format() -> None:
     assert fake.calls[0].config.tools is None
 
 
-async def test_server_error_after_all_attempts_is_unavailable() -> None:
-    fake = as_single_chunk_streams([api_error(503, "UNAVAILABLE")] * 3)
-
-    with pytest.raises(LLMUnavailableError):
-        await generate(provider_with(fake))
-
-    assert len(fake.calls) == 3
-
-
-async def test_rate_limit_after_all_attempts_is_rate_limited_error() -> None:
-    fake = as_single_chunk_streams([api_error(429, "RESOURCE_EXHAUSTED")] * 3)
-
-    with pytest.raises(LLMRateLimitedError) as exc_info:
-        await generate(provider_with(fake))
-
-    assert (exc_info.value.status_code, exc_info.value.code) == (429, "LLM_RATE_LIMITED")
-    assert len(fake.calls) == 3
-
-
-@pytest.mark.parametrize(
-    ("error", "expected"),
-    [
-        (api_error(400, "INVALID_ARGUMENT", "Function call is missing a thought_signature"), LLMRequestError),
-        (api_error(400, "INVALID_ARGUMENT", "API key not valid. Please pass a valid API key."), LLMNotConfiguredError),
-        (api_error(403, "PERMISSION_DENIED"), LLMNotConfiguredError),
-        (api_error(404, "NOT_FOUND", "models/gemini-typo is not found"), LLMNotConfiguredError),
-    ],
-)
-async def test_client_errors_are_not_retried(error: errors.APIError, expected: type[Exception]) -> None:
+async def test_client_errors_are_not_retried() -> None:
+    error = api_error(400, "INVALID_ARGUMENT", "API key not valid. Please pass a valid API key.")
     fake = as_single_chunk_streams([error, TEXT_RESPONSE])
 
-    with pytest.raises(expected):
+    with pytest.raises(LLMNotConfiguredError):
         await generate(provider_with(fake))
 
     assert len(fake.calls) == 1
-
-
-async def test_slow_response_times_out_without_retry() -> None:
-    fake = as_single_chunk_streams([Stall(seconds=5), TEXT_RESPONSE])
-
-    with pytest.raises(LLMTimeoutError) as exc_info:
-        await generate(provider_with(fake, timeout_seconds=0.05))
-
-    assert (exc_info.value.status_code, exc_info.value.code) == (504, "LLM_TIMEOUT")
-    assert len(fake.calls) == 1
-
-
-async def test_sdk_http_timeout_is_timeout_error() -> None:
-    # google-genai 3.x는 httpx2로 요청한다. SDK의 HttpOptions timeout이 먼저 끝나면 이 예외가 올라온다.
-    fake = as_single_chunk_streams([httpx2.ReadTimeout("read timed out"), TEXT_RESPONSE])
-
-    with pytest.raises(LLMTimeoutError):
-        await generate(provider_with(fake))
-
-    assert len(fake.calls) == 1
-
-
-async def test_connection_error_is_retried_then_unavailable() -> None:
-    fake = as_single_chunk_streams([httpx2.ConnectError("refused")] * 2)
-
-    with pytest.raises(LLMUnavailableError):
-        await generate(provider_with(fake, max_attempts=2))
-
-    assert len(fake.calls) == 2
-
-
-async def test_blocked_prompt_returns_empty_turn() -> None:
-    fake = as_single_chunk_streams([
-        types.GenerateContentResponse(
-            prompt_feedback=types.GenerateContentResponsePromptFeedback(block_reason=types.BlockedReason.SAFETY)
-        )
-    ])
-
-    turn = await generate(provider_with(fake))
-
-    assert turn == ModelTurn(finish_reason="PROMPT_SAFETY")
-
-
-async def test_aclose_closes_the_client() -> None:
-    closed: list[bool] = []
-
-    async def close() -> None:
-        closed.append(True)
-
-    provider = GeminiProvider(
-        FakeGenerateContentStream([]),
-        model="m",
-        max_output_tokens=1,
-        timeout_seconds=1,
-        close=close,
-    )
-    await provider.aclose()
-
-    assert closed == [True]

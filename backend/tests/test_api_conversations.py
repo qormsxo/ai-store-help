@@ -10,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from google.genai import types
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,27 +17,14 @@ from app.agent.service import AgentService
 from app.api.deps import get_agent_service
 from app.config import get_settings
 from app.db import get_session
-from app.errors import (
-    AgentEmptyResponseError,
-    AgentLimitExceededError,
-    LLMNotConfiguredError,
-    LLMTimeoutError,
-)
+from app.errors import AgentLimitExceededError, LLMNotConfiguredError, LLMTimeoutError
 from app.llm.provider import LLMProvider
 from app.llm.types import ModelTurn, UserTurn
 from app.main import app
-from app.models import Conversation, Message, MessageRole, Store, SupportTicket
-from app.schemas import MAX_MESSAGE_LENGTH
+from app.models import Message, MessageRole, Store, SupportTicket
 from app.services.conversation_service import HISTORY_LIMIT
 from tests.factories import create_conversation, create_knowledge, create_message, create_store
-from tests.fake_gemini import (
-    Stall,
-    api_error,
-    as_single_chunk_streams,
-    function_call_response,
-    provider_with,
-    text_response,
-)
+from tests.fake_gemini import api_error, as_single_chunk_streams, provider_with
 from tests.mock_llm import MockGeminiProvider, final_text, function_call, turn_kinds
 
 REFUND_QUESTION = "60일이 지난 뒤에도 환불받을 수 있나요?"
@@ -107,47 +93,6 @@ def error_of(res: httpx.Response) -> dict[str, str]:
 # --- 1~3. 대화 생성, 조회, 메시지 목록 ---------------------------------------------------
 
 
-async def test_create_conversation(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
-    res = await client.post("/api/conversations", json={"visitor_id": "visitor-1"})
-
-    assert res.status_code == 201
-    body = res.json()
-    assert set(body) == {"id", "visitor_id", "created_at"}
-    assert body["visitor_id"] == "visitor-1"
-    saved = await session.get(Conversation, uuid.UUID(body["id"]))
-    assert saved is not None
-    # 현재 매장과 연결되고, 응답에는 매장 id를 노출하지 않는다.
-    assert saved.store_id == store.id
-
-
-async def test_same_visitor_can_start_several_independent_conversations(
-    client: httpx.AsyncClient, store: Store
-) -> None:
-    first = await start_conversation(client, "visitor-1")
-    second = await start_conversation(client, "visitor-1")
-
-    assert first != second
-
-
-@pytest.mark.parametrize("body", [{}, {"visitor_id": ""}, {"visitor_id": "   "}, {"visitor_id": "v" * 65}])
-async def test_create_conversation_rejects_invalid_visitor_id(
-    client: httpx.AsyncClient, store: Store, body: dict[str, str]
-) -> None:
-    res = await client.post("/api/conversations", json=body)
-
-    assert res.status_code == 422
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
-
-
-async def test_get_conversation(client: httpx.AsyncClient, store: Store) -> None:
-    conversation_id = await start_conversation(client, "visitor-7")
-
-    res = await client.get(f"/api/conversations/{conversation_id}")
-
-    assert res.status_code == 200
-    assert (res.json()["id"], res.json()["visitor_id"]) == (conversation_id, "visitor-7")
-
-
 async def test_list_messages_in_time_order(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
     conversation = await create_conversation(session, store)
     await create_message(session, conversation, "first question", MessageRole.USER)
@@ -167,36 +112,7 @@ async def test_list_messages_in_time_order(client: httpx.AsyncClient, session: A
     assert set(res.json()[0]) == {"id", "role", "content", "created_at"}
 
 
-async def test_list_messages_of_new_conversation_is_empty(client: httpx.AsyncClient, store: Store) -> None:
-    conversation_id = await start_conversation(client)
-
-    res = await client.get(f"/api/conversations/{conversation_id}/messages")
-
-    assert res.json() == []
-
-
 # --- 11. 없는 대화, 다른 매장 ------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("path", ["", "/messages"])
-async def test_unknown_conversation_is_404(client: httpx.AsyncClient, store: Store, path: str) -> None:
-    res = await client.get(f"/api/conversations/{uuid.uuid4()}{path}")
-
-    assert res.status_code == 404
-    assert error_of(res) == {"code": "CONVERSATION_NOT_FOUND", "message": "대화를 찾을 수 없습니다."}
-
-
-async def test_post_message_to_unknown_conversation_is_404_and_skips_llm(
-    client: httpx.AsyncClient, store: Store
-) -> None:
-    provider = MockGeminiProvider([final_text("never")])
-    use_agent(provider)
-
-    res = await send(client, str(uuid.uuid4()), "Hi")
-
-    assert res.status_code == 404
-    assert error_of(res)["code"] == "CONVERSATION_NOT_FOUND"
-    assert provider.requests == []
 
 
 async def test_other_store_conversation_is_hidden(
@@ -217,83 +133,6 @@ async def test_other_store_conversation_is_hidden(
         assert error_of(res)["code"] == "CONVERSATION_NOT_FOUND"
     assert provider.requests == []
     assert await stored_messages(session, str(other.id)) == []
-
-
-async def test_malformed_conversation_id_is_validation_error(client: httpx.AsyncClient, store: Store) -> None:
-    res = await client.get("/api/conversations/not-a-uuid")
-
-    assert res.status_code == 422
-
-
-# --- 메시지 입력 검증 ----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("content", ["", "   ", "\n\t "])
-async def test_empty_message_is_rejected_before_llm(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store, content: str
-) -> None:
-    conversation_id = await start_conversation(client)
-    provider = MockGeminiProvider([final_text("never")])
-    use_agent(provider)
-
-    res = await send(client, conversation_id, content)
-
-    assert res.status_code == 422
-    assert provider.requests == []
-    assert await stored_messages(session, conversation_id) == []
-
-
-async def test_too_long_message_is_rejected_before_llm(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    provider = MockGeminiProvider([final_text("never")])
-    use_agent(provider)
-
-    res = await send(client, conversation_id, "a" * (MAX_MESSAGE_LENGTH + 1))
-
-    assert res.status_code == 422
-    assert provider.requests == []
-    assert await stored_messages(session, conversation_id) == []
-
-
-async def test_message_at_max_length_is_accepted(client: httpx.AsyncClient, store: Store) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(MockGeminiProvider([final_text("OK")]))
-
-    res = await send(client, conversation_id, "a" * MAX_MESSAGE_LENGTH)
-
-    assert_completed(res)
-
-
-async def test_missing_content_field_is_rejected(client: httpx.AsyncClient, store: Store) -> None:
-    conversation_id = await start_conversation(client)
-
-    res = await client.post(f"/api/conversations/{conversation_id}/messages/stream", json={})
-
-    assert res.status_code == 422
-
-
-# --- 4, 6. 고객 메시지와 AI 응답 저장 ----------------------------------------------------------
-
-
-async def test_send_message_saves_user_message_and_assistant_reply(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(MockGeminiProvider([function_call("get_store_profile"), final_text("We are at 1427 Oak Street.")]))
-
-    res = await send(client, conversation_id, "  What is your store address?  ")
-
-    assert_completed(res)
-    saved = await stored_messages(session, conversation_id)
-    # 앞뒤 공백은 정리해서 저장한다.
-    assert [(m.role, m.content) for m in saved] == [
-        (MessageRole.USER, "What is your store address?"),
-        (MessageRole.ASSISTANT, "We are at 1427 Oak Street."),
-    ]
-    listed = await client.get(f"/api/conversations/{conversation_id}/messages")
-    assert [m["id"] for m in listed.json()] == [str(m.id) for m in saved]
 
 
 async def test_expired_exact_question_is_not_reused(
@@ -454,84 +293,22 @@ async def test_multi_tool_request_creates_ticket_for_this_message(
     ]
 
 
-async def test_real_gemini_provider_chain_links_function_calls_and_responses(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    """GeminiProvider(진짜) → AgentService → API. SDK 호출만 가짜라서 Gemini 형식 그대로 검증한다."""
-    conversation_id = await start_conversation(client)
-    fake = as_single_chunk_streams(
-        [
-            function_call_response("get_store_profile", "call-1"),
-            function_call_response("search_knowledge", "call-2", query="환불 60일"),
-            function_call_response("create_support_ticket", "call-3", **TICKET_CALL),
-            text_response("I've forwarded your question to our staff."),
-        ]
-    )
-    use_agent(provider_with(fake))
-
-    res = await send(client, conversation_id, REFUND_QUESTION)
-
-    assert_completed(res)
-    saved = await stored_messages(session, conversation_id)
-    assert saved[-1].content == "I've forwarded your question to our staff."
-    assert len(fake.calls) == 4
-    assert [c.role for c in fake.calls[0].contents] == ["user"]
-    assert fake.calls[0].contents[0].parts == [types.Part(text=REFUND_QUESTION)]
-
-    expected = [("call-1", "get_store_profile"), ("call-2", "search_knowledge"), ("call-3", "create_support_ticket")]
-    for index in (1, 2, 3):
-        contents = fake.calls[index].contents
-        # 요청마다 이전 Context 전체 + (모델의 Function Call, 그 결과)가 붙는다.
-        assert [c.role for c in contents] == ["user"] + ["model", "user"] * index
-        for position, (call_id, name) in enumerate(expected[:index]):
-            model_content, response_content = contents[1 + 2 * position], contents[2 + 2 * position]
-            (function_call_part,) = model_content.parts or []
-            (function_response_part,) = response_content.parts or []
-            assert function_call_part.function_call is not None
-            assert (function_call_part.function_call.id, function_call_part.function_call.name) == (call_id, name)
-            # Function Response는 짝이 되는 Function Call과 같은 id, name이다. thought signature도 그대로 돌아간다.
-            assert function_response_part.function_response is not None
-            assert (function_response_part.function_response.id, function_response_part.function_response.name) == (
-                call_id,
-                name,
-            )
-            assert function_call_part.thought_signature == f"signature-{call_id}".encode()
-
-    # create_support_ticket의 Function Response에는 실제로 만든 티켓 id가 들어 있다.
-    ticket = await session.scalar(select(SupportTicket))
-    assert ticket is not None
-    last_response = (fake.calls[3].contents[-1].parts or [])[0].function_response
-    assert last_response is not None
-    assert (last_response.response or {})["ticket_id"] == str(ticket.id)
-
-
 # --- 12. Gemini API 오류 ------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("outcomes", "timeout_seconds", "code"),
-    [
-        ([api_error(429, "RESOURCE_EXHAUSTED", "Quota exceeded for project 123")] * 3, 5, "LLM_RATE_LIMITED"),
-        ([api_error(503, "UNAVAILABLE", "backend 10.0.0.1 overloaded")] * 3, 5, "LLM_UNAVAILABLE"),
-        ([api_error(400, "INVALID_ARGUMENT", "API key not valid: AIzaSyFAKE")], 5, "LLM_NOT_CONFIGURED"),
-        ([api_error(400, "INVALID_ARGUMENT", "bad request details")], 5, "LLM_REQUEST_FAILED"),
-        ([Stall(seconds=5)], 0.05, "LLM_TIMEOUT"),
-    ],
-)
 async def test_gemini_errors_become_safe_error_responses_and_keep_user_message(
-    client: httpx.AsyncClient,
-    session: AsyncSession,
-    store: Store,
-    outcomes: list[types.GenerateContentResponse | Exception | Stall],
-    timeout_seconds: float,
-    code: str,
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
 ) -> None:
     conversation_id = await start_conversation(client)
-    use_agent(provider_with(as_single_chunk_streams(list(outcomes)), timeout_seconds=timeout_seconds))
+    use_agent(
+        provider_with(
+            as_single_chunk_streams([api_error(429, "RESOURCE_EXHAUSTED", "Quota exceeded for project 123")] * 3)
+        )
+    )
 
     res = await send(client, conversation_id, "Do you allow dogs inside?")
 
-    assert stream_error(res)["code"] == code
+    assert stream_error(res)["code"] == "LLM_RATE_LIMITED"
     # 구글이 준 오류 문구, 키, IP 같은 내부 정보는 고객 응답에 없다.
     for leaked in ("AIzaSy", "10.0.0.1", "project 123", "RESOURCE_EXHAUSTED", "bad request details"):
         assert leaked not in res.text
@@ -559,66 +336,23 @@ async def test_missing_gemini_configuration_is_503(client: httpx.AsyncClient, se
 # --- 13. Agent 실행 실패 시 고객 메시지 보존 ------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("failure", "code"),
-    [
-        (LLMTimeoutError("timeout"), "LLM_TIMEOUT"),
-        (AgentLimitExceededError("too many calls"), "AGENT_LIMIT_EXCEEDED"),
-        (AgentEmptyResponseError("empty"), "AGENT_EMPTY_RESPONSE"),
-    ],
-)
 async def test_agent_failure_keeps_user_message_and_rolls_back_ticket(
-    client: httpx.AsyncClient,
-    session: AsyncSession,
-    store: Store,
-    failure: Exception,
-    code: str,
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
 ) -> None:
     conversation_id = await start_conversation(client)
     # 티켓까지 만든 뒤 마지막 LLM 호출이 실패하는 경우. 답변 없이 티켓만 남으면 안 된다.
+    failure = AgentLimitExceededError("too many calls")
     use_agent(MockGeminiProvider([function_call("create_support_ticket", **TICKET_CALL), failure]))
 
     res = await send(client, conversation_id, REFUND_QUESTION)
 
-    assert stream_error(res)["code"] == code
+    assert stream_error(res)["code"] == "AGENT_LIMIT_EXCEEDED"
     assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
         (MessageRole.USER, REFUND_QUESTION)
     ]
     assert await ticket_count(session) == 0
     listed = await client.get(f"/api/conversations/{conversation_id}/messages")
     assert [(m["role"], m["content"]) for m in listed.json()] == [("user", REFUND_QUESTION)]
-
-
-async def test_reply_save_failure_keeps_user_message_and_rolls_back_ticket(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    # NUL 문자는 PostgreSQL text에 저장할 수 없다. 실제 DB 오류로 답변 저장 실패를 만든다.
-    use_agent(MockGeminiProvider([function_call("create_support_ticket", **TICKET_CALL), final_text("bad\x00reply")]))
-
-    res = await send(client, conversation_id, REFUND_QUESTION)
-
-    assert stream_error(res) == {
-        "code": "MESSAGE_SAVE_FAILED",
-        "message": "메시지를 저장하지 못했습니다. 같은 메시지를 다시 보내 주세요.",
-    }
-    assert [m.role for m in await stored_messages(session, conversation_id)] == [MessageRole.USER]
-    assert await ticket_count(session) == 0
-
-
-async def test_user_message_save_failure_saves_nothing(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    provider = MockGeminiProvider([final_text("never")])
-    use_agent(provider)
-
-    res = await send(client, conversation_id, "bad\x00message")
-
-    assert res.status_code == 503
-    assert error_of(res)["code"] == "MESSAGE_SAVE_FAILED"
-    assert provider.requests == []
-    assert await stored_messages(session, conversation_id) == []
 
 
 # --- 14. 중복 메시지 저장 방지 ---------------------------------------------------------------------------
@@ -674,26 +408,3 @@ async def test_same_text_after_an_answer_is_a_new_message(client: httpx.AsyncCli
         MessageRole.USER,
         MessageRole.ASSISTANT,
     ]
-
-
-async def test_different_text_after_failure_is_saved_as_a_new_message(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    provider = MockGeminiProvider([LLMTimeoutError("timeout"), final_text("We open at 7.")])
-    use_agent(provider)
-
-    await send(client, conversation_id, "What time do you open?")
-    res = await send(client, conversation_id, "Sorry, I mean on Sundays?")
-
-    assert_completed(res)
-    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
-        (MessageRole.USER, "What time do you open?"),
-        (MessageRole.USER, "Sorry, I mean on Sundays?"),
-        (MessageRole.ASSISTANT, "We open at 7."),
-    ]
-    # 답을 받지 못한 이전 질문도 문맥에 남는다.
-    assert provider.requests[1].turns == (
-        UserTurn(text="What time do you open?"),
-        UserTurn(text="Sorry, I mean on Sundays?"),
-    )

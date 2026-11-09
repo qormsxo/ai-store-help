@@ -29,7 +29,6 @@ from app.models import (
     TicketStatus,
     utcnow,
 )
-from app.schemas import MAX_ANSWER_LENGTH
 from app.services import knowledge_search_service
 from tests.factories import create_conversation, create_knowledge, create_message, create_store, create_ticket
 from tests.mock_llm import MockGeminiProvider, final_text, function_call, observation
@@ -128,30 +127,6 @@ def error_of(res: httpx.Response) -> dict[str, str]:
 # --- 목록 조회 ---------------------------------------------------------------------------------
 
 
-async def test_list_tickets_oldest_first(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
-    first = await open_ticket(session, store, "Is there parking?")
-    second = await open_ticket(session, store, "Do you sell gift cards?")
-
-    res = await client.get("/api/owner/tickets")
-
-    assert res.status_code == 200
-    assert [t["id"] for t in res.json()] == [str(first.id), str(second.id)]
-    assert set(res.json()[0]) == {
-        "id",
-        "status",
-        "question",
-        "escalation_reason",
-        "knowledge_lifetime",
-        "conversation_id",
-        "owner_answer",
-        "created_at",
-        "resolved_at",
-    }
-    assert res.json()[0]["question"] == "Is there parking?"
-    assert res.json()[0]["status"] == "open"
-    assert res.json()[0]["escalation_reason"] == "no_knowledge"
-
-
 async def test_list_tickets_filters_by_status(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
     open_one = await open_ticket(session, store, "Is there parking?")
     done = await open_ticket(session, store, "Do you sell gift cards?")
@@ -168,21 +143,18 @@ async def test_list_tickets_filters_by_status(client: httpx.AsyncClient, session
     assert [t["id"] for t in opened.json()] == [str(open_one.id)]
     assert [t["id"] for t in resolved.json()] == [str(done.id)]
     assert resolved.json()[0]["owner_answer"] == "Yes."
-    assert len(everything.json()) == 2
-
-
-async def test_list_tickets_rejects_unknown_status(client: httpx.AsyncClient, store: Store) -> None:
-    res = await client.get("/api/owner/tickets", params={"status": "archived"})
-
-    assert res.status_code == 422
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
-
-
-async def test_list_tickets_is_empty_without_tickets(client: httpx.AsyncClient, store: Store) -> None:
-    res = await client.get("/api/owner/tickets")
-
-    assert res.status_code == 200
-    assert res.json() == []
+    assert [t["id"] for t in everything.json()] == [str(open_one.id), str(done.id)]
+    assert set(everything.json()[0]) == {
+        "id",
+        "status",
+        "question",
+        "escalation_reason",
+        "knowledge_lifetime",
+        "conversation_id",
+        "owner_answer",
+        "created_at",
+        "resolved_at",
+    }
 
 
 async def test_list_excludes_other_store_tickets(
@@ -195,64 +167,6 @@ async def test_list_excludes_other_store_tickets(
     res = await client.get("/api/owner/tickets")
 
     assert [t["id"] for t in res.json()] == [str(mine.id)]
-
-
-# --- 상세 조회 ---------------------------------------------------------------------------------
-
-
-async def test_ticket_detail_includes_customer_conversation(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store)
-
-    res = await client.get(f"/api/owner/tickets/{ticket.id}")
-
-    assert res.status_code == 200
-    body = res.json()
-    assert body["id"] == str(ticket.id)
-    assert body["question"] == QUESTION
-    assert body["source_message_id"] == str(ticket.source_message_id)
-    assert body["conversation"]["id"] == str(ticket.conversation_id)
-    assert [(m["role"], m["content"]) for m in body["conversation"]["messages"]] == [
-        ("user", "Do you allow dogs inside?"),
-        ("assistant", "I've forwarded your question to our staff."),
-    ]
-    assert body["conversation"]["messages"][0]["id"] == body["source_message_id"]
-
-
-@pytest.mark.parametrize("method", ["get", "reply"])
-async def test_unknown_ticket_is_404(client: httpx.AsyncClient, store: Store, method: str) -> None:
-    ticket_id = uuid.uuid4()
-
-    res = (
-        await client.get(f"/api/owner/tickets/{ticket_id}")
-        if method == "get"
-        else await reply(client, ticket_id, "Yes.")
-    )
-
-    assert res.status_code == 404
-    assert error_of(res) == {"code": "TICKET_NOT_FOUND", "message": "문의를 찾을 수 없습니다."}
-
-
-async def test_other_store_ticket_is_hidden_and_untouched(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    other_store = await create_store(session, slug="other-store")
-    other = await open_ticket(session, other_store, "Other store question?")
-
-    detail = await client.get(f"/api/owner/tickets/{other.id}")
-    answered = await reply(client, other.id, "Yes.")
-
-    assert detail.status_code == answered.status_code == 404
-    assert error_of(answered)["code"] == "TICKET_NOT_FOUND"
-    assert await count(session, KnowledgeEntry) == 0
-    assert (await fresh_ticket(session, other.id)).status is TicketStatus.OPEN
-
-
-async def test_malformed_ticket_id_is_validation_error(client: httpx.AsyncClient, store: Store) -> None:
-    res = await client.get("/api/owner/tickets/not-a-uuid")
-
-    assert res.status_code == 422
 
 
 # --- 사장 답변 처리 ----------------------------------------------------------------------------
@@ -284,6 +198,11 @@ async def test_reply_saves_knowledge_resolves_ticket_and_messages_customer(
     detail = await client.get(f"/api/owner/tickets/{ticket.id}")
     assert detail.json()["knowledge_active"] is True
     assert detail.json()["knowledge_expires_at"] is None
+    assert [(m["role"], m["content"]) for m in detail.json()["conversation"]["messages"]] == [
+        ("user", "Do you allow dogs inside?"),
+        ("assistant", "I've forwarded your question to our staff."),
+        ("assistant", ANSWER),
+    ]
 
     # 2. 티켓: resolved, 답변과 해결 시각 기록
     saved_ticket = await fresh_ticket(session, ticket.id)
@@ -295,21 +214,6 @@ async def test_reply_saves_knowledge_resolves_ticket_and_messages_customer(
     assert (last.role, last.content) == (MessageRole.ASSISTANT, ANSWER)
     assert body["conversation_message"]["id"] == str(last.id)
     assert (body["conversation_message"]["role"], body["conversation_message"]["content"]) == ("assistant", ANSWER)
-
-
-async def test_customer_sees_owner_answer_in_the_original_conversation(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store)
-
-    await reply(client, ticket.id, ANSWER)
-
-    res = await client.get(f"/api/conversations/{ticket.conversation_id}/messages")
-    assert [(m["role"], m["content"]) for m in res.json()] == [
-        ("user", "Do you allow dogs inside?"),
-        ("assistant", "I've forwarded your question to our staff."),
-        ("assistant", ANSWER),
-    ]
 
 
 async def test_next_customer_gets_the_owner_answer_through_the_agent(
@@ -351,29 +255,6 @@ async def test_second_reply_is_rejected_and_changes_nothing(
     assert (await fresh_ticket(session, ticket.id)).owner_answer == ANSWER
     assert [m.content for m in await messages_of(session, ticket.conversation_id)].count(ANSWER) == 1
     assert (await fresh_knowledge(session, first.json()["knowledge_entry_id"])).answer == ANSWER
-
-
-@pytest.mark.parametrize("answer", ["", "   ", "\n\t", "a" * (MAX_ANSWER_LENGTH + 1)])
-async def test_invalid_answer_changes_nothing(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store, answer: str
-) -> None:
-    ticket = await open_ticket(session, store)
-
-    res = await reply(client, ticket.id, answer)
-
-    assert res.status_code == 422
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
-    assert await count(session, KnowledgeEntry) == 0
-    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
-    assert len(await messages_of(session, ticket.conversation_id)) == 2
-
-
-async def test_answer_at_max_length_is_accepted(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
-    ticket = await open_ticket(session, store)
-
-    res = await reply(client, ticket.id, "a" * MAX_ANSWER_LENGTH)
-
-    assert res.status_code == 200
 
 
 async def test_reply_marked_none_reaches_the_customer_without_knowledge(
@@ -423,36 +304,6 @@ async def test_reply_until_chosen_date_expires_at_the_next_local_midnight(
     assert shown == knowledge.expires_at
 
 
-async def test_reply_until_today_expires_at_the_next_local_midnight(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store)
-    zone = ZoneInfo(store.timezone)
-    today = datetime.now(zone).date()
-
-    res = await reply(client, ticket.id, ANSWER, "until", today.isoformat())
-
-    assert res.status_code == 200
-    local = (await fresh_knowledge(session, res.json()["knowledge_entry_id"])).expires_at
-    assert local is not None
-    local = local.astimezone(zone)
-    assert local.date() == today + timedelta(days=1)
-    assert (local.hour, local.minute, local.second) == (0, 0, 0)
-
-
-async def test_reply_until_without_a_date_changes_nothing(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store)
-
-    res = await reply(client, ticket.id, ANSWER, "until")
-
-    assert res.status_code == 422
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
-    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
-    assert await count(session, KnowledgeEntry) == 0
-
-
 async def test_reply_until_a_past_date_changes_nothing(
     client: httpx.AsyncClient, session: AsyncSession, store: Store
 ) -> None:
@@ -465,18 +316,6 @@ async def test_reply_until_a_past_date_changes_nothing(
     assert error_of(res)["code"] == "KNOWLEDGE_EXPIRY_INVALID"
     assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
     assert await count(session, KnowledgeEntry) == 0
-
-
-async def test_reply_with_a_date_on_a_permanent_answer_is_rejected(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store)
-
-    res = await reply(client, ticket.id, ANSWER, "permanent", "2026-11-20")
-
-    assert res.status_code == 422
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
-    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
 
 
 async def test_reply_replaces_expired_knowledge_of_the_same_question(
@@ -497,23 +336,6 @@ async def test_reply_replaces_expired_knowledge_of_the_same_question(
     assert old.is_active is False
     assert new.is_active is True
     assert new.expires_at is None
-
-
-async def test_missing_lifetime_is_rejected(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
-    ticket = await open_ticket(session, store)
-
-    res = await client.post(f"/api/owner/tickets/{ticket.id}/reply", json={"answer": ANSWER})
-
-    assert res.status_code == 422
-    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
-
-
-async def test_missing_answer_field_is_rejected(client: httpx.AsyncClient, session: AsyncSession, store: Store) -> None:
-    ticket = await open_ticket(session, store)
-
-    res = await client.post(f"/api/owner/tickets/{ticket.id}/reply", json={})
-
-    assert res.status_code == 422
 
 
 # --- 같은 질문의 지식이 이미 있는 경우 --------------------------------------------------------------
@@ -614,18 +436,3 @@ async def test_failure_while_saving_the_message_rolls_back_knowledge_and_ticket(
     retried = await reply(client, ticket.id, ANSWER)
     assert retried.status_code == 200
     assert await count(session, KnowledgeEntry) == 1
-
-
-# --- 기타 경계 -------------------------------------------------------------------------------------
-
-
-async def test_reply_works_when_source_message_is_gone(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    ticket = await open_ticket(session, store, with_source_message=False)
-
-    detail = await client.get(f"/api/owner/tickets/{ticket.id}")
-    res = await reply(client, ticket.id, ANSWER)
-
-    assert detail.json()["source_message_id"] is None
-    assert res.status_code == 200

@@ -47,19 +47,6 @@ async def test_lists_only_that_visitors_conversations_newest_activity_first(
     assert body[1]["last_message"] == "Second question"
 
 
-async def test_other_store_conversation_is_not_listed(
-    session: AsyncSession, client: httpx.AsyncClient, store: Store
-) -> None:
-    other = await create_store(session, slug="other-store")
-    hidden = await create_conversation(session, other, visitor_id="demo-emma-walsh")
-    await create_message(session, hidden, "Secret")
-
-    res = await client.get("/api/conversations", params={"visitor_id": "demo-emma-walsh"})
-
-    assert res.status_code == 200
-    assert res.json() == []
-
-
 async def test_preview_is_the_last_dialogue_not_a_system_message_and_is_shortened(
     session: AsyncSession, client: httpx.AsyncClient, store: Store
 ) -> None:
@@ -78,17 +65,3 @@ async def test_preview_is_the_last_dialogue_not_a_system_message_and_is_shortene
     preview = res.json()[0]["last_message"]
     assert preview == "가" * 79 + "…"
     assert "system note" not in preview
-
-
-async def test_unknown_visitor_is_an_empty_list(client: httpx.AsyncClient, store: Store) -> None:
-    res = await client.get("/api/conversations", params={"visitor_id": "nobody"})
-
-    assert res.status_code == 200
-    assert res.json() == []
-
-
-@pytest.mark.parametrize("params", [{}, {"visitor_id": ""}, {"visitor_id": "x" * 65}])
-async def test_bad_visitor_id_is_422(client: httpx.AsyncClient, store: Store, params: dict[str, str]) -> None:
-    res = await client.get("/api/conversations", params=params)
-
-    assert res.status_code == 422

@@ -22,7 +22,7 @@ from app.repositories.store_repository import find_store_by_slug
 
 logger = logging.getLogger(__name__)
 
-# 전화번호는 가상 번호 대역(555-01xx), 이메일과 웹사이트는 예약 도메인(.example)을 써서 실존 업체와 겹치지 않게 한다.
+# 전화번호는 가상 번호 이메일과 웹사이트는 예약 도메인(.example)을 써서 실존 업체와 겹치지 않게 한다.
 DEMO_STORE_NAME = "오크앤파인 커피"
 DEMO_STORE_DESCRIPTION = "동네 커피집입니다. 소량으로 볶은 원두, 갓 구운 빵, 간단한 점심을 팝니다."
 DEMO_STORE_ADDRESS = "서울특별시 마포구 연남로 12"

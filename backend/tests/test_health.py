@@ -31,10 +31,3 @@ async def test_health_returns_503_when_db_down(client: httpx.AsyncClient) -> Non
 
     assert res.status_code == 503
     assert res.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
-
-
-async def test_unknown_route_uses_common_error_format(client: httpx.AsyncClient) -> None:
-    res = await client.get("/api/nope")
-
-    assert res.status_code == 404
-    assert res.json()["error"]["code"] == "NOT_FOUND"

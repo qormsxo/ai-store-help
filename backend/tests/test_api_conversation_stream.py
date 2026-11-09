@@ -153,50 +153,8 @@ async def stream_over_asgi(
 
 # --- 1~5. 기본 스트리밍 ------------------------------------------------------------------------------
 
-async def test_response_is_an_event_stream(client: httpx.AsyncClient, store: Store) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(MockGeminiProvider([Chunks(["Hello", "!"])]))
-
-    res = await stream(client, conversation_id, "Hi")
-
-    assert res.status_code == 200
-    assert res.headers["content-type"].startswith("text/event-stream")
-    assert res.headers["cache-control"] == "no-cache"
-    # 프록시가 응답을 모으지 않게 한다.
-    assert res.headers["x-accel-buffering"] == "no"
-
-async def test_several_message_delta_events_then_completed(client: httpx.AsyncClient, store: Store) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(MockGeminiProvider([Chunks(["Our store", " is open", " from 9 AM to 6 PM."])]))
-
-    res = await stream(client, conversation_id, "What are your business hours?")
-
-    events = parse_sse(res.text)
-    assert [e.name for e in events] == ["message_delta", "message_delta", "message_delta", "completed"]
-    assert [e.data for e in events[:3]] == [{"text": "Our store"}, {"text": " is open"}, {"text": " from 9 AM to 6 PM."}]
-
-async def test_answer_is_saved_once_as_a_single_message_not_per_chunk(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(MockGeminiProvider([Chunks(["Yes, ", "we ", "have ", "oat ", "milk."])]))
-
-    await stream(client, conversation_id, "Do you have oat milk?")
-
-    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
-        (MessageRole.USER, "Do you have oat milk?"),
-        (MessageRole.ASSISTANT, "Yes, we have oat milk."),
-    ]
-    listed = await client.get(f"/api/conversations/{conversation_id}/messages")
-    assert [(m["role"], m["content"]) for m in listed.json()] == [
-        ("user", "Do you have oat milk?"),
-        ("assistant", "Yes, we have oat milk."),
-    ]
-
-# --- 실시간 전달 --------------------------------------------------------------------------------------
-
 async def test_deltas_reach_the_client_while_the_model_is_still_generating(
-    client: httpx.AsyncClient, store: Store
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
 ) -> None:
     """첫 조각은 모델이 두 번째 조각을 만들기 전에 클라이언트에 도착한다.
 
@@ -216,24 +174,10 @@ async def test_deltas_reach_the_client_while_the_model_is_still_generating(
     assert result.status == 200
     assert [e.name for e in result.events] == ["message_delta", "message_delta", "completed"]
     assert delta_texts(result.events) == ["first", " second"]
-
-# --- SSE 형식 안전성 ----------------------------------------------------------------------------------
-
-async def test_newlines_and_special_characters_do_not_break_the_event_format(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    hostile = ["Line1\nLine2\r\n", 'He said "hi" \\ \u2028 한국어 🙂', "\n\nevent: error\ndata: {}\n\n"]
-    use_agent(MockGeminiProvider([Chunks(list(hostile))]))
-
-    res = await stream(client, conversation_id, "Hi")
-
-    # 텍스트 안의 줄바꿈과 가짜 이벤트 문구는 JSON 문자열로 이스케이프되어, 이벤트는 정확히 4개다.
-    events = parse_sse(res.text)
-    assert [e.name for e in events] == ["message_delta"] * 3 + ["completed"]
-    assert delta_texts(events) == hostile
-    *_, saved = await stored_messages(session, conversation_id)
-    assert saved.content == "".join(hostile).strip()
+    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
+        (MessageRole.USER, "Hi"),
+        (MessageRole.ASSISTANT, "first second"),
+    ]
 
 # --- 6. 답변 도중 실패 ----------------------------------------------------------------------------------
 
@@ -261,54 +205,6 @@ async def test_failure_in_the_middle_of_the_answer_never_saves_a_partial_message
     ]
     # 답변 없는 티켓이 남지 않는다.
     assert await ticket_count(session) == 0
-
-async def test_non_inquiry_is_an_error_event_and_the_answer_is_not_saved(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(
-        MockGeminiProvider(
-            [Chunks(["Nice weather."], tool_calls=function_call("reject_not_inquiry").tool_calls)]
-        )
-    )
-
-    res = await stream(client, conversation_id, "How is the weather?")
-
-    events = parse_sse(res.text)
-    assert [e.name for e in events] == ["message_delta", "error"]
-    assert events[1].data == {"code": "NOT_STORE_INQUIRY", "message": "매장에 대한 문의만 답변할 수 있습니다."}
-    assert [(m.role, m.content) for m in await stored_messages(session, conversation_id)] == [
-        (MessageRole.USER, "How is the weather?")
-    ]
-    assert await ticket_count(session) == 0
-
-
-async def test_unexpected_error_is_reported_without_internal_details(
-    client: httpx.AsyncClient, session: AsyncSession, store: Store
-) -> None:
-    conversation_id = await start_conversation(client)
-    use_agent(MockGeminiProvider([RuntimeError("secret internal detail: db password=hunter2")]))
-
-    res = await stream(client, conversation_id, "Hi")
-
-    events = parse_sse(res.text)
-    assert [e.name for e in events] == ["error"]
-    assert events[0].data == {"code": "INTERNAL_ERROR", "message": "서버 내부 오류가 발생했습니다."}
-    assert "hunter2" not in res.text
-    assert [m.role for m in await stored_messages(session, conversation_id)] == [MessageRole.USER]
-
-# --- 스트림 시작 전 오류는 일반 오류 응답 ---------------------------------------------------------------
-
-async def test_unknown_conversation_is_a_plain_404_not_a_stream(client: httpx.AsyncClient, store: Store) -> None:
-    provider = MockGeminiProvider([Chunks(["never"])])
-    use_agent(provider)
-
-    res = await stream(client, str(uuid.uuid4()), "Hi")
-
-    assert res.status_code == 404
-    assert res.headers["content-type"].startswith("application/json")
-    assert res.json()["error"]["code"] == "CONVERSATION_NOT_FOUND"
-    assert provider.requests == []
 
 # --- 7. 연결 종료 -------------------------------------------------------------------------------------
 

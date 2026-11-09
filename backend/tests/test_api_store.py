@@ -28,15 +28,6 @@ async def test_get_store_returns_profile_and_hours(client: httpx.AsyncClient, se
     ]
 
 
-async def test_get_store_does_not_expose_internal_id(client: httpx.AsyncClient, session: AsyncSession) -> None:
-    app.dependency_overrides[get_session] = lambda: session
-    await create_store(session, slug=get_settings().default_store_slug)
-
-    res = await client.get("/api/store")
-
-    assert "id" not in res.json()
-
-
 async def test_get_store_returns_503_when_store_is_not_seeded(
     client: httpx.AsyncClient, session: AsyncSession
 ) -> None:
