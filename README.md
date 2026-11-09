@@ -37,13 +37,19 @@ docker compose up --build
 
 ### 로컬로 실행하기
 
-DB만 Docker로 띄운다. 백엔드와 프론트는 각자 실행한다. `DATABASE_URL`은 `localhost`를 가리켜야 한다. PC에 5432가 이미 있으면 `.env`의 `POSTGRES_PORT`와 `DATABASE_URL` 포트를 같이 바꾼다.
+도커는 설치가 안되어있다고 가정한다. Python, Node.js, PostgreSQL 16이 설치되어 있고 PostgreSQL이 실행 중이라고 가정한다. 백엔드는 `DATABASE_URL`만 본다. `.env.example`과 같다면 계정 `app`, 비밀번호 `app`, 데이터베이스 `app`, 포트 5432다. 포트가 다르면 `DATABASE_URL`만 고친다.
 
-로컬 `uvicorn`은 마이그레이션을 실행하지 않는다. `backend/`에서 가상환경을 켠 뒤 `alembic upgrade head`를 먼저 한다. 모델을 바꾸면 마이그레이션을 같이 만들고, 새 PostgreSQL enum은 `downgrade`에서 `DROP TYPE`까지 넣는다. 수동 생성은 `alembic revision --autogenerate -m "설명"`이다.
+슈퍼유저로 계정과 데이터베이스를 만든다. 이미 있으면 이 두 줄은 건너뛴다.
+
+```bash
+psql -U postgres -c "CREATE USER app WITH PASSWORD 'app';"
+psql -U postgres -c "CREATE DATABASE app OWNER app;"
+```
+
+로컬 `uvicorn`은 마이그레이션을 실행하지 않는다. `backend/`에서 가상환경을 켠 뒤 `alembic upgrade head`를 먼저 한다. 이 명령이 스키마와 데모 매장 2곳을 넣는다.
 
 ```bash
 cp .env.example .env
-docker compose up -d db
 
 cd backend
 py -m venv .venv
