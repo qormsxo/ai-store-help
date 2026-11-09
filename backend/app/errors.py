@@ -55,6 +55,13 @@ class TicketAlreadyResolvedError(ConflictError):
     code = "TICKET_ALREADY_RESOLVED"
 
 
+class InvalidKnowledgeExpiryError(AppError):
+    """기한 있는 지식인데 날짜가 없거나, 매장 현지 기준으로 이미 지난 날짜다."""
+
+    status_code = 422
+    code = "KNOWLEDGE_EXPIRY_INVALID"
+
+
 class LLMNotConfiguredError(AppError):
     """GEMINI_API_KEY/GEMINI_MODEL이 없거나, 키 또는 모델이 Gemini에서 거부되었다."""
 

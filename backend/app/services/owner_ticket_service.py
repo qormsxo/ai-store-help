@@ -3,6 +3,7 @@
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +19,7 @@ from app.models import (
     TicketStatus,
     utcnow,
 )
-from app.repositories import support_ticket_repository
+from app.repositories import knowledge_repository, support_ticket_repository
 from app.services import conversation_service, knowledge_service
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ class TicketDetail:
     ticket: SupportTicket
     conversation: Conversation
     messages: list[Message]
+    # 이 티켓에서 만든 지식. 손님에게만 전달한 답이면 없다.
+    knowledge_entry: KnowledgeEntry | None
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,10 @@ async def get_ticket_detail(session: AsyncSession, store_id: uuid.UUID, ticket_i
         raise TicketNotFoundError("문의를 찾을 수 없습니다.")
     conversation = await conversation_service.get_conversation(session, store_id, ticket.conversation_id)
     messages = await conversation_service.list_messages(session, conversation)
-    return TicketDetail(ticket=ticket, conversation=conversation, messages=messages)
+    knowledge = await knowledge_repository.find_entry_by_source_ticket(session, ticket.id)
+    return TicketDetail(
+        ticket=ticket, conversation=conversation, messages=messages, knowledge_entry=knowledge
+    )
 
 
 async def reply_to_ticket(
@@ -70,6 +76,7 @@ async def reply_to_ticket(
     ticket_id: uuid.UUID,
     answer: str,
     lifetime: KnowledgeLifetime,
+    expires_on: date | None = None,
 ) -> ReplyResult:
     """사장 답변을 처리한다. 이 함수가 커밋한다.
 
@@ -89,7 +96,7 @@ async def reply_to_ticket(
             raise TicketAlreadyResolvedError("이미 답변이 등록된 문의입니다.")
 
         ticket.knowledge_lifetime = lifetime
-        saved = await knowledge_service.save_owner_answer(session, ticket, answer, lifetime)
+        saved = await knowledge_service.save_owner_answer(session, ticket, answer, lifetime, expires_on)
         ticket.owner_answer = answer
         ticket.status = TicketStatus.RESOLVED
         ticket.resolved_at = utcnow()

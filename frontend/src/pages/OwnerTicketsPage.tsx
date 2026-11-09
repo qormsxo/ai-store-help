@@ -36,23 +36,23 @@ const REASON_LABEL: Record<Ticket["escalation_reason"], string> = {
 const LIFETIME_CHOICES: { id: KnowledgeLifetime; label: string }[] = [
   { id: "none", label: "이 손님에게만" },
   { id: "permanent", label: "계속 저장" },
-  { id: "until_end_of_day", label: "오늘 자정까지" },
+  { id: "until", label: "날짜까지" },
 ];
 
-const LIFETIME_NOTE: Record<KnowledgeLifetime, string> = {
+const LIFETIME_NOTE: Record<KnowledgeLifetime, string | null> = {
   none: "이 답은 이 손님에게만 전달됩니다. 지식으로는 저장되지 않습니다.",
-  permanent: "이 답은 고객 대화에 전달되고, 계속 쓰는 지식으로 저장됩니다.",
-  until_end_of_day: "이 답은 고객 대화에 전달되고, 오늘 자정까지만 지식으로 씁니다.",
+  permanent: null,
+  until: "고른 날짜가 끝나면, 다음 날 0시부터 지식에서 빠집니다.",
 };
 
 function savedNotice(result: OwnerReplyResult): string {
   if (result.knowledge_entry_id === null) {
     return "답변을 등록했습니다. 이 손님에게만 전달하고 지식으로는 남기지 않았습니다.";
   }
-  if (result.ticket.knowledge_lifetime === "until_end_of_day") {
+  if (result.ticket.knowledge_lifetime === "until") {
     return result.superseded_knowledge_id === null
-      ? "답변을 등록했습니다. 오늘 매장 시간 끝까지 지식으로 씁니다."
-      : "답변을 등록했습니다. 같은 질문의 이전 지식을 오늘까지만 쓰는 답으로 바꿨습니다.";
+      ? "답변을 등록했습니다. 고른 날짜가 끝나는 자정까지 지식으로 씁니다."
+      : "답변을 등록했습니다. 같은 질문의 이전 지식을 고른 날짜까지 쓰는 답으로 바꿨습니다.";
   }
   return result.superseded_knowledge_id === null
     ? "답변을 등록했습니다. 고객 대화에 전달되고 지식으로 저장되었습니다."
@@ -69,6 +69,7 @@ export default function OwnerTicketsPage() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [lifetime, setLifetime] = useState<KnowledgeLifetime>("none");
+  const [expiresOn, setExpiresOn] = useState("");
   const [sending, setSending] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -124,6 +125,7 @@ export default function OwnerTicketsPage() {
     setSelectedId(ticketId);
     setDraft("");
     setLifetime("none");
+    setExpiresOn("");
     setReplyError(null);
   }
 
@@ -137,9 +139,16 @@ export default function OwnerTicketsPage() {
     setReplyError(null);
     setNotice(null);
     try {
-      const result = await replyToTicket(storeSlug, selectedId, answer, lifetime);
+      const result = await replyToTicket(
+        storeSlug,
+        selectedId,
+        answer,
+        lifetime,
+        lifetime === "until" ? expiresOn : null,
+      );
       setDraft("");
       setLifetime("none");
+      setExpiresOn("");
       setNotice(savedNotice(result));
       // 미처리 목록에서는 방금 답한 문의가 빠지므로, 그 문의를 답변 완료에서 그대로 보여 준다.
       setFilter("resolved");
@@ -244,7 +253,7 @@ export default function OwnerTicketsPage() {
                 <div className="owner-answer">
                   <h3>등록된 답변</h3>
                   <p>{showing.owner_answer}</p>
-                  <p className="chat-note">{LIFETIME_NOTE[showing.knowledge_lifetime]}</p>
+                  <p className={validityClass(showing)}>{validityText(showing)}</p>
                   {showing.resolved_at !== null && (
                     <time dateTime={showing.resolved_at}>{formatDateTime(showing.resolved_at)} 등록</time>
                   )}
@@ -268,7 +277,21 @@ export default function OwnerTicketsPage() {
                       </label>
                     ))}
                   </fieldset>
-                  <p className="chat-note">{LIFETIME_NOTE[lifetime]}</p>
+                  {lifetime === "until" && (
+                    <label className="owner-until" htmlFor="owner-expires-on">
+                      언제까지
+                      <input
+                        id="owner-expires-on"
+                        type="date"
+                        value={expiresOn}
+                        min={todayInputValue()}
+                        required
+                        disabled={sending}
+                        onChange={(event) => setExpiresOn(event.target.value)}
+                      />
+                    </label>
+                  )}
+                  {LIFETIME_NOTE[lifetime] !== null && <p className="chat-note">{LIFETIME_NOTE[lifetime]}</p>}
                   <label htmlFor="owner-answer">답변</label>
                   <textarea
                     id="owner-answer"
@@ -283,7 +306,10 @@ export default function OwnerTicketsPage() {
                     <span>
                       {draft.trim().length}/{MAX_ANSWER_LENGTH}
                     </span>
-                    <button type="submit" disabled={sending || draft.trim() === ""}>
+                    <button
+                      type="submit"
+                      disabled={sending || draft.trim() === "" || (lifetime === "until" && expiresOn === "")}
+                    >
                       {sending ? "등록 중" : "답변 등록"}
                     </button>
                   </div>
@@ -302,11 +328,69 @@ export default function OwnerTicketsPage() {
   );
 }
 
+function todayInputValue(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 function messageOf(caught: unknown): string {
   if (caught instanceof ApiError) {
     return caught.message;
   }
   return "요청에 실패했습니다. 다시 시도해 주세요.";
+}
+
+function validityClass(ticket: TicketDetail): string {
+  if (ticket.knowledge_active === false || knowledgeExpired(ticket)) {
+    return "owner-validity owner-validity-ended";
+  }
+  if (ticket.knowledge_lifetime === "none" || ticket.knowledge_active === null) {
+    return "owner-validity";
+  }
+  return "owner-validity owner-validity-open";
+}
+
+function validityText(ticket: TicketDetail): string {
+  if (ticket.knowledge_active === false) {
+    return "이 답은 더 이상 지식으로 쓰이지 않습니다.";
+  }
+  if (ticket.knowledge_lifetime === "none" || ticket.knowledge_active === null) {
+    return "이 손님에게만 전달되었습니다.";
+  }
+  if (ticket.knowledge_expires_at !== null) {
+    const until = formatValidity(ticket.knowledge_expires_at);
+    if (knowledgeExpired(ticket)) {
+      return until === ""
+        ? "기한이 지나 이 답은 더 이상 지식으로 쓰이지 않습니다."
+        : `${until}에 기한이 지나 더 이상 지식으로 쓰이지 않습니다.`;
+    }
+    return until === "" ? "기한이 있는 지식입니다." : `${until}까지 유효`;
+  }
+  return "기한 없이 유효";
+}
+
+function knowledgeExpired(ticket: TicketDetail): boolean {
+  if (ticket.knowledge_expires_at === null) {
+    return false;
+  }
+  const expiresAt = new Date(ticket.knowledge_expires_at).getTime();
+  return !Number.isNaN(expiresAt) && expiresAt <= Date.now();
+}
+
+function formatValidity(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleString("ko-KR", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatDateTime(value: string): string {

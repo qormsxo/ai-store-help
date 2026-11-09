@@ -55,11 +55,12 @@ class TicketStatus(enum.StrEnum):
 
 
 class KnowledgeLifetime(enum.StrEnum):
-    """사장이 답한 뒤 그 답을 지식으로 어떻게 둘지. 티켓을 만들 때 모델이 정한다."""
+    """사장이 답을 등록할 때 그 답을 지식으로 어떻게 둘지 고른다."""
 
     NONE = "none"
     PERMANENT = "permanent"
-    UNTIL_END_OF_DAY = "until_end_of_day"
+    # 사장이 고른 날짜가 끝나는 매장 현지 다음 날 0시에 만료된다.
+    UNTIL = "until"
 
 
 def _pg_enum(enum_class: type[enum.StrEnum], name: str) -> Enum:

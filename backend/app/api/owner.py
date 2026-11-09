@@ -41,10 +41,13 @@ async def get_ticket(ticket_id: uuid.UUID, store: CurrentStoreDep, session: Sess
         **ConversationResponse.model_validate(detail.conversation).model_dump(),
         messages=[MessageResponse.model_validate(message) for message in detail.messages],
     )
+    knowledge = detail.knowledge_entry
     return TicketDetailResponse(
         **TicketResponse.model_validate(detail.ticket).model_dump(),
         source_message_id=detail.ticket.source_message_id,
         conversation=conversation,
+        knowledge_expires_at=knowledge.expires_at if knowledge is not None else None,
+        knowledge_active=knowledge.is_active if knowledge is not None else None,
     )
 
 
@@ -57,7 +60,7 @@ async def reply_to_ticket(
     사장이 고른 저장 방식대로 지식을 남기거나 남기지 않는다. 티켓은 resolved가 되고, 고객 대화에 assistant 메시지가 추가된다.
     """
     result = await owner_ticket_service.reply_to_ticket(
-        session, store.id, ticket_id, body.answer, body.knowledge_lifetime
+        session, store.id, ticket_id, body.answer, body.knowledge_lifetime, body.expires_on
     )
     return OwnerReplyResponse(
         ticket=TicketResponse.model_validate(result.ticket),

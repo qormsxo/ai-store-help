@@ -186,6 +186,12 @@ body {
   font-size: 14px;
 }
 
+.chat-pending-dots {
+  display: inline-block;
+  width: 2em;
+  text-align: left;
+}
+
 .bubble {
   max-width: min(78%, 520px);
   padding: 10px 14px;
@@ -609,6 +615,11 @@ button:disabled {
   font-size: 12px;
 }
 
+.owner-answer time {
+  display: block;
+  margin-top: 8px;
+}
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
@@ -666,6 +677,24 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.owner-answer .owner-validity {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: #e7edf5;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.owner-answer .owner-validity-open {
+  color: var(--ok-ink);
+}
+
+.owner-answer .owner-validity-ended {
+  color: var(--warn-ink);
+}
+
 .owner-form {
   display: flex;
   flex-direction: column;
@@ -700,6 +729,22 @@ button:disabled {
   align-items: center;
   gap: 6px;
   font-weight: 400;
+}
+
+.owner-until {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.owner-until input {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #10141b;
+  color: inherit;
+  font: inherit;
 }
 
 .owner-form .chat-note {

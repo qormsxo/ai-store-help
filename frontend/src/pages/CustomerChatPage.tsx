@@ -324,7 +324,12 @@ export default function CustomerChatPage() {
               <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
             </article>
           ))}
-          {waitingForAnswer && <p className="chat-pending">답변을 작성하고 있습니다. 잠시만 기다려 주세요.</p>}
+          {waitingForAnswer && (
+            <p className="chat-pending">
+              답변을 작성하고 있습니다. 잠시만 기다려 주세요
+              <PendingDots />
+            </p>
+          )}
           <div ref={bottom} />
         </div>
         {error !== null && (
@@ -419,6 +424,31 @@ function appendAnswerText(current: ChatMessage[], answerId: string, text: string
     );
   }
   return [...current, { id: answerId, role: "assistant", content: text, created_at: new Date().toISOString() }];
+}
+
+const DOT_LIMIT = 4;
+const DOT_STEP_MS = 400;
+
+function PendingDots() {
+  const [count, setCount] = useState(1);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    if (media.matches) {
+      setCount(DOT_LIMIT);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setCount((current) => (current >= DOT_LIMIT ? 1 : current + 1));
+    }, DOT_STEP_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <span className="chat-pending-dots" aria-hidden="true">
+      {".".repeat(count)}
+    </span>
+  );
 }
 
 function messageOf(caught: unknown): string {

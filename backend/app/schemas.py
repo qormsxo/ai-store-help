@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 
 from app.models import EscalationReason, KnowledgeLifetime, MessageRole, TicketStatus
 
@@ -125,12 +125,25 @@ class TicketDetailResponse(TicketResponse):
     # 문의가 만들어진 고객 메시지. 메시지가 정리되어 없을 수 있다.
     source_message_id: uuid.UUID | None
     conversation: TicketConversationResponse
+    # 이 티켓의 지식. 손님에게만 전달한 답이면 둘 다 없다.
+    knowledge_expires_at: datetime | None = None
+    knowledge_active: bool | None = None
 
 
 class OwnerReplyCreate(BaseModel):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ANSWER_LENGTH)]
     # 사장이 답변 등록 때 고른다. 티켓에 미리 적힌 값은 쓰지 않는다.
     knowledge_lifetime: KnowledgeLifetime
+    # until일 때만 보낸다. 이 날짜가 끝나는 매장 현지 다음 날 0시에 지식이 만료된다.
+    expires_on: date | None = None
+
+    @model_validator(mode="after")
+    def expires_on_only_when_until(self) -> "OwnerReplyCreate":
+        if self.knowledge_lifetime is KnowledgeLifetime.UNTIL and self.expires_on is None:
+            raise ValueError("날짜를 정해 주세요.")
+        if self.knowledge_lifetime is not KnowledgeLifetime.UNTIL and self.expires_on is not None:
+            raise ValueError("날짜는 기한을 정할 때만 보낼 수 있습니다.")
+        return self
 
 
 class OwnerReplyResponse(BaseModel):

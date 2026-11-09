@@ -86,11 +86,12 @@ async def reply(
     ticket_id: uuid.UUID,
     answer: str,
     lifetime: str = "permanent",
+    expires_on: str | None = None,
 ) -> httpx.Response:
-    return await client.post(
-        f"/api/owner/tickets/{ticket_id}/reply",
-        json={"answer": answer, "knowledge_lifetime": lifetime},
-    )
+    payload: dict[str, str] = {"answer": answer, "knowledge_lifetime": lifetime}
+    if expires_on is not None:
+        payload["expires_on"] = expires_on
+    return await client.post(f"/api/owner/tickets/{ticket_id}/reply", json=payload)
 
 
 async def count(session: AsyncSession, model: type[KnowledgeEntry] | type[Message] | type[SupportTicket]) -> int:
@@ -280,6 +281,9 @@ async def test_reply_saves_knowledge_resolves_ticket_and_messages_customer(
         True,
     )
     assert knowledge.source_ticket_id == ticket.id
+    detail = await client.get(f"/api/owner/tickets/{ticket.id}")
+    assert detail.json()["knowledge_active"] is True
+    assert detail.json()["knowledge_expires_at"] is None
 
     # 2. 티켓: resolved, 답변과 해결 시각 기록
     saved_ticket = await fresh_ticket(session, ticket.id)
@@ -387,6 +391,9 @@ async def test_reply_marked_none_reaches_the_customer_without_knowledge(
     assert body["superseded_knowledge_id"] is None
     assert body["ticket"]["status"] == "resolved"
     assert body["ticket"]["knowledge_lifetime"] == "none"
+    detail = await client.get(f"/api/owner/tickets/{ticket.id}")
+    assert detail.json()["knowledge_active"] is None
+    assert detail.json()["knowledge_expires_at"] is None
     assert body["conversation_message"]["content"] == ANSWER
     kept = await fresh_knowledge(session, existing.id)
     assert kept.is_active is True
@@ -394,21 +401,82 @@ async def test_reply_marked_none_reaches_the_customer_without_knowledge(
     assert await count(session, KnowledgeEntry) == 1
 
 
-async def test_reply_until_end_of_day_expires_at_the_next_local_midnight(
+async def test_reply_until_chosen_date_expires_at_the_next_local_midnight(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    ticket = await open_ticket(session, store)
+    zone = ZoneInfo(store.timezone)
+    chosen = datetime.now(zone).date() + timedelta(days=3)
+
+    res = await reply(client, ticket.id, ANSWER, "until", chosen.isoformat())
+
+    assert res.status_code == 200
+    assert res.json()["ticket"]["knowledge_lifetime"] == "until"
+    knowledge = await fresh_knowledge(session, res.json()["knowledge_entry_id"])
+    assert knowledge.expires_at is not None
+    local = knowledge.expires_at.astimezone(zone)
+    assert (local.hour, local.minute, local.second, local.microsecond) == (0, 0, 0, 0)
+    assert local.date() == chosen + timedelta(days=1)
+    detail = await client.get(f"/api/owner/tickets/{ticket.id}")
+    assert detail.json()["knowledge_active"] is True
+    shown = datetime.fromisoformat(detail.json()["knowledge_expires_at"])
+    assert shown == knowledge.expires_at
+
+
+async def test_reply_until_today_expires_at_the_next_local_midnight(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    ticket = await open_ticket(session, store)
+    zone = ZoneInfo(store.timezone)
+    today = datetime.now(zone).date()
+
+    res = await reply(client, ticket.id, ANSWER, "until", today.isoformat())
+
+    assert res.status_code == 200
+    local = (await fresh_knowledge(session, res.json()["knowledge_entry_id"])).expires_at
+    assert local is not None
+    local = local.astimezone(zone)
+    assert local.date() == today + timedelta(days=1)
+    assert (local.hour, local.minute, local.second) == (0, 0, 0)
+
+
+async def test_reply_until_without_a_date_changes_nothing(
     client: httpx.AsyncClient, session: AsyncSession, store: Store
 ) -> None:
     ticket = await open_ticket(session, store)
 
-    res = await reply(client, ticket.id, ANSWER, "until_end_of_day")
+    res = await reply(client, ticket.id, ANSWER, "until")
 
-    assert res.status_code == 200
-    assert res.json()["ticket"]["knowledge_lifetime"] == "until_end_of_day"
-    knowledge = await fresh_knowledge(session, res.json()["knowledge_entry_id"])
-    assert knowledge.expires_at is not None
-    local = knowledge.expires_at.astimezone(ZoneInfo(store.timezone))
-    now_local = datetime.now(ZoneInfo(store.timezone))
-    assert (local.hour, local.minute, local.second, local.microsecond) == (0, 0, 0, 0)
-    assert local.date() == now_local.date() + timedelta(days=1)
+    assert res.status_code == 422
+    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
+    assert await count(session, KnowledgeEntry) == 0
+
+
+async def test_reply_until_a_past_date_changes_nothing(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    ticket = await open_ticket(session, store)
+    yesterday = (datetime.now(ZoneInfo(store.timezone)).date() - timedelta(days=1)).isoformat()
+
+    res = await reply(client, ticket.id, ANSWER, "until", yesterday)
+
+    assert res.status_code == 422
+    assert error_of(res)["code"] == "KNOWLEDGE_EXPIRY_INVALID"
+    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
+    assert await count(session, KnowledgeEntry) == 0
+
+
+async def test_reply_with_a_date_on_a_permanent_answer_is_rejected(
+    client: httpx.AsyncClient, session: AsyncSession, store: Store
+) -> None:
+    ticket = await open_ticket(session, store)
+
+    res = await reply(client, ticket.id, ANSWER, "permanent", "2026-11-20")
+
+    assert res.status_code == 422
+    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert (await fresh_ticket(session, ticket.id)).status is TicketStatus.OPEN
 
 
 async def test_reply_replaces_expired_knowledge_of_the_same_question(

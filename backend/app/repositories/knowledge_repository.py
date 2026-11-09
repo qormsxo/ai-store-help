@@ -33,6 +33,15 @@ def _still_current() -> SQLColumnExpression[bool]:
     return or_(KnowledgeEntry.expires_at.is_(None), KnowledgeEntry.expires_at > func.now())
 
 
+async def find_entry_by_source_ticket(
+    session: AsyncSession, source_ticket_id: uuid.UUID
+) -> KnowledgeEntry | None:
+    """이 티켓에서 만든 지식. 티켓당 최대 하나다. 없으면 None."""
+    return await session.scalar(
+        select(KnowledgeEntry).where(KnowledgeEntry.source_ticket_id == source_ticket_id)
+    )
+
+
 async def find_active_entry_by_question(
     session: AsyncSession, store_id: uuid.UUID, question: str, *, reusable_only: bool = True
 ) -> KnowledgeEntry | None:
